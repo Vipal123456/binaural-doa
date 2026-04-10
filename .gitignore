@@ -16,4 +16,5 @@ __pycache__/
 *.log
 *.ckpt
 *.pth
+*.npz
 *.pt
