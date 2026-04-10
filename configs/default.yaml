@@ -1,0 +1,105 @@
+# ==============================================================================
+# 双耳 DOA-net：默认配置
+# ==============================================================================
+# 所有可配置的路径、超参数和设置均集中在此文件中。
+# 通过命令行覆盖任意字段：python train.py --train.lr 0.0005
+# ==============================================================================
+
+dataset:
+  # 数据集根目录路径（静态数据集）。
+  # 期望目录结构：
+  #   root_dir/
+  #   ├── binaural_dev/binauralXXXX.wav
+  #   └── metadata_dev/metadataXXXX.csv
+  root_dir: "/disk2/bywang/DOA-net/data/static"
+
+  # 数据集类型（当前仅支持 "static"）
+  dataset_type: "static"
+
+  # 音频处理采样率（读取时重采样到该采样率）。
+  sample_rate: 16000
+
+  # 切片时长（秒）。
+  segment_seconds: 2.0
+
+  # 训练 / 验证 / 测试 划分比例。
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+  # 用于可复现划分的固定随机种子。
+  split_seed: 42
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: "hann"
+
+model:
+  # 共享编码器
+  encoder_channels: [32, 64, 128]   # 卷积通道数递增序列
+  encoder_out_dim: 128               # 每只耳朵的输出特征维度
+
+  # IPD / ILD 投影
+  proj_dim: 128                      # IPD/ILD 投影后的维度
+
+  # 差异先验 MLP
+  prior_hidden_dim: 256
+  prior_out_dim: 128                 # D_feat 维度
+
+  # 交叉注意力
+  attention_dim: 128
+  num_heads: 4
+
+  # 门控
+  gate_dim: 128                      # 应与注意力输出维度匹配
+  use_gating: true                   # 是否启用门控（消融实验可设为 false）
+
+  # 时序建模（BiGRU）
+  gru_hidden_size: 128
+  gru_num_layers: 2
+  gru_dropout: 0.1
+
+  # 分类器
+  num_classes: 72                    # 方位角区间数：360 / 5 = 72
+  azimuth_range: [-180, 180]         # [最小值, 最大值) 度
+
+  # 通用设置
+  dropout: 0.2
+
+train:
+  batch_size: 32
+  num_workers: 4
+  epochs: 100
+  lr: 0.001
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+
+  # 学习率调度器："cosine" 或 "step"
+  scheduler: "cosine"
+  # 阶梯调度器参数
+  step_size: 30
+  step_gamma: 0.1
+  # 余弦调度器参数
+  cosine_T_max: 100     # 通常设置为总轮数
+  cosine_eta_min: 0.00001
+
+  # 混合精度训练
+  amp: true
+
+  # 设备
+  device: "cuda"
+
+  # 梯度裁剪（0 = 禁用）
+  grad_clip: 5.0
+
+  # 日志记录间隔（批次数）
+  log_interval: 20
+
+  # 验证频率（轮数）
+  val_interval: 1
+
+output:
+  save_dir: "outputs/checkpoints"
+  log_dir: "outputs/logs"

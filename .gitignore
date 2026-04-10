@@ -1,0 +1,19 @@
+# Large local datasets and generated artifacts
+data/
+outputs/
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Editor and OS files
+.vscode/
+.DS_Store
+
+# Logs and checkpoints
+*.log
+*.ckpt
+*.pth
+*.pt
