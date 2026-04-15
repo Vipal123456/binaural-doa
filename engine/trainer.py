@@ -65,15 +65,24 @@ class Trainer:
         else:
             # 获取前后消歧权重
             anti_confusion_weight = getattr(t, 'anti_confusion_weight', 0.0)
+            circular_soft_label_weight = getattr(t, 'circular_soft_label_weight', 0.0)
+            circular_kappa = getattr(t, 'circular_kappa', 4.0)
             self.criterion = DOALoss(
                 num_classes=m.num_classes,
                 label_smoothing=t.label_smoothing,
                 anti_confusion_weight=anti_confusion_weight,
+                circular_soft_label_weight=circular_soft_label_weight,
+                circular_kappa=circular_kappa,
             )
+            msg = "使用分类loss"
             if anti_confusion_weight > 0:
-                self.logger.info(f"使用分类loss + 前后消歧惩罚 (weight={anti_confusion_weight})")
-            else:
-                self.logger.info("使用分类loss")
+                msg += f" + 前后消歧惩罚(weight={anti_confusion_weight})"
+            if circular_soft_label_weight > 0:
+                msg += (
+                    f" + circular_soft_label(weight={circular_soft_label_weight},"
+                    f" kappa={circular_kappa})"
+                )
+            self.logger.info(msg)
 
         # 优化器
         self.optimizer = torch.optim.AdamW(

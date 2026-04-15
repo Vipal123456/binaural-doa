@@ -33,10 +33,21 @@ class IPDILDProjection(nn.Module):
         目标投影维度。
     """
 
-    def __init__(self, freq_bins: int, proj_dim: int):
+    def __init__(
+        self,
+        freq_bins: int,
+        proj_dim: int,
+        ipd_in_bins: int = None,
+        ild_in_bins: int = None,
+    ):
         super().__init__()
-        self.ipd_proj = nn.Linear(freq_bins, proj_dim)
-        self.ild_proj = nn.Linear(freq_bins, proj_dim)
+        if ipd_in_bins is None:
+            ipd_in_bins = freq_bins
+        if ild_in_bins is None:
+            ild_in_bins = freq_bins
+
+        self.ipd_proj = nn.Linear(ipd_in_bins, proj_dim)
+        self.ild_proj = nn.Linear(ild_in_bins, proj_dim)
 
     def forward(self, ipd: torch.Tensor, ild: torch.Tensor):
         """

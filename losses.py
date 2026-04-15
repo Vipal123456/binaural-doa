@@ -16,6 +16,10 @@ class DOALoss(nn.Module):
         标签平滑系数（0 = 不使用平滑）。
     anti_confusion_weight : float
         前后混淆惩罚权重（0 = 不使用）。
+    circular_soft_label_weight : float
+        circular soft label loss 的权重（0 = 不使用）。
+    circular_kappa : float
+        von-Mises 软标签集中度，越大越接近 one-hot。
     """
 
     def __init__(
@@ -23,11 +27,20 @@ class DOALoss(nn.Module):
         num_classes: int = 72,
         label_smoothing: float = 0.0,
         anti_confusion_weight: float = 0.0,
+        circular_soft_label_weight: float = 0.0,
+        circular_kappa: float = 4.0,
     ):
         super().__init__()
         self.ce = nn.CrossEntropyLoss(label_smoothing=label_smoothing, reduction='none')
         self.num_classes = num_classes
         self.anti_confusion_weight = anti_confusion_weight
+        self.circular_soft_label_weight = float(circular_soft_label_weight)
+        self.circular_kappa = float(circular_kappa)
+
+        # 预计算每个bin的中心角（弧度）用于构造圆周软标签。
+        centers_deg = -180.0 + (torch.arange(num_classes).float() + 0.5) * (360.0 / num_classes)
+        centers_rad = torch.deg2rad(centers_deg)
+        self.register_buffer("bin_centers_rad", centers_rad, persistent=False)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -40,6 +53,7 @@ class DOALoss(nn.Module):
         """
         # 基础交叉熵
         ce_loss = self.ce(logits, targets)  # [B]
+        total_loss = ce_loss
 
         if self.anti_confusion_weight > 0:
             # 计算预测的bin和真实bin的差距
@@ -56,9 +70,23 @@ class DOALoss(nn.Module):
 
             # 对前后混淆的样本施加额外惩罚
             confusion_penalty = is_opposite.float() * self.anti_confusion_weight
-            ce_loss = ce_loss * (1.0 + confusion_penalty)
+            total_loss = total_loss * (1.0 + confusion_penalty)
 
-        return ce_loss.mean()
+        # Circular soft label loss（可选）
+        if self.circular_soft_label_weight > 0:
+            # 取目标bin对应中心角，构造von-Mises软标签分布
+            centers = self.bin_centers_rad.to(logits.device)
+            target_angles = centers[targets]                               # [B]
+            all_centers = centers.unsqueeze(0)                             # [1, C]
+            delta = all_centers - target_angles.unsqueeze(1)              # [B, C]
+            soft_targets = torch.exp(self.circular_kappa * torch.cos(delta))
+            soft_targets = soft_targets / soft_targets.sum(dim=-1, keepdim=True)
+
+            log_probs = torch.log_softmax(logits, dim=-1)
+            circular_loss = -(soft_targets * log_probs).sum(dim=-1)       # [B]
+            total_loss = total_loss + self.circular_soft_label_weight * circular_loss
+
+        return total_loss.mean()
 
 
 class MultiTaskDOALoss(nn.Module):

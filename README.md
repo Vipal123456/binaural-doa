@@ -17,26 +17,31 @@
 3. 完成了 50h CIPIC+混响+DEMAND 强噪版本（v1）训练测试。
 4. 针对误差偏大问题完成了降误差改动（v2）：
    - 数据改为混合难度（clean/reverb/reverb+noise）
-   - 训练稳定化（amp=false, grad_clip=1.0, lr下降）
+   - 训练稳定化（amp=false, grad_clip=1.0）
    - 启用前后对向混淆惩罚（训练损失内）
+5. 完成了回归分支实验（v3，分类+DOA回归），相比v2 accuracy稍升但MAE未改善。
+6. 完成了增强输入特征实验（v4，IPD sin/cos + coherence），结果接近v2基线。
+7. **完成了创新主干结构实验（v5，attention bias + 独立门控 + attention pooling + 圆形软标签）**
 
-### 近期关键结果
+### 近期关键结果对比
 
-- 50h 混响+DEMAND v1（恢复后 best 测试）
-  - accuracy: 0.4641
-  - top3: 0.7462
-  - MAE: 16.9202°
-  - median: 2.7107°
+| 版本 | 数据配置 | Accuracy | Top-3 | MAE | Median | error<5° | 关键创新 |
+|------|---------|----------|-------|-----|--------|----------|---------|
+| v1 | 全量强噪 | 0.4641 | 0.7462 | 16.92° | 2.71° | - | baseline |
+| v2 | 混合难度 | 0.7067 | 0.8649 | 9.67° | 2.24° | 77.6% | 数据混合 |
+| v3 | 混合难度+回归 | 0.7280 | 0.8695 | 9.69° | 2.42° | 72.4% | 分类+回归 |
+| v4 | 混合难度+增强特征 | 0.6952 | 0.8692 | 9.86° | 2.24° | 77.3% | IPD增强 |
+| **v5** | **混合难度+创新主干** | **0.7344** | **0.8744** | **8.72°** | **2.14°** | **80.5%** | **架构创新** ✓ |
 
-- 50h 混响+DEMAND v2（完整训练 best 正式测试）
-  - accuracy: 0.7067
-  - top3: 0.8649
-  - MAE: 9.6673°
-  - median: 2.2356°
-
-v2 相比 v1 在该任务上有显著改善，主要体现在 MAE、Top-1、Top-3 和低误差样本占比。
+**v5 主要成果：**
+- ✓ MAE 相对 v2 降低 9.8%（9.67° → 8.72°）
+- ✓ accuracy 提升 3.9%（0.7067 → 0.7344）
+- ✓ error<5° 的精准定位能力提升 3.7%（77.6% → 80.5%）
+- ✓ 相比特征增强（v4）方案，架构创新显示出更强的优化潜力
 
 ## 模型架构
+
+### 基础流程（v1-v4通用）
 
 ```
 立体声 WAV
@@ -61,15 +66,40 @@ BiGRU + 分类头
 72 类方位角分类（[-180, 180)）
 ```
 
+### v5 架构创新
+
+v5 在上述基础上引入的核心改进：
+
+1. **Attention Bias 注入（双向低秩）**
+   - 从 d_feat 生成 rank=16 的双向 LR/RL attention bias
+   - 在多头注意力计算中：score = QK^T/√d + bias
+   - 增强频域与方位特征的相关性学习
+
+2. **双向独立残差门控**
+   - 替代统一门控，LR/RL 分离学习权重：g_lr、g_rl
+   - 输出形式：f + g*a（残差+调制）
+   - 适应双耳物理非对称性，精细化特征融合
+
+3. **Attention Pooling**
+   - BiGRU 后新增 attention 池化代替简单 mean pooling
+   - 学习时间权重，动态突出关键时间步
+   - 提升对长序列的自适应聚合与抗噪能力
+
+4. **圆形软标签损失（Circular Soft Label Loss）**
+   - 多任务：CE loss (weight=1.0) + circular soft label (weight=0.2, κ=4.0)
+   - 利用 von Mises 分布编码角度的周期性约束
+   - 减少类边界跳跃问题，提升梯度稳定性
+
 主要模块：
 
 - `dataset/feature_extractor.py`: 双耳频域特征提取
 - `models/encoder.py`: 共享编码器
 - `models/difference_prior.py`: 差异先验
-- `models/cross_attention.py`: 双向交叉注意力
-- `models/gating.py`: 门控融合
-- `models/temporal_head.py`: 时序建模与分类输出
-- `models/binaural_doa_net.py`: 整体模型组装
+- `models/cross_attention.py`: 双向交叉注意力 + attention bias
+- `models/gating.py`: 独立残差门控（v5 升级）
+- `models/temporal_head.py`: BiGRU + attention pooling（v5 升级）
+- `models/binaural_doa_net.py`: 整体模型组装（集成所有创新）
+- `losses.py`: 分类 + 圆形软标签多任务损失 (v5)
 
 ## 数据与实验主线
 
@@ -87,7 +117,7 @@ BiGRU + 分类头
   - `data/librispeech_cipic_subject003_reverb50h`
 - 50h reverb+DEMAND（v1，全量强噪）
   - `data/librispeech_cipic_subject003_reverb_demand50h`
-- 50h reverb+DEMAND（v2，混合难度）
+- 50h reverb+DEMAND（v2~v5，混合难度）
   - `data/librispeech_cipic_subject003_reverb_demand50h_v2`
 
 ### 划分比例
@@ -113,32 +143,31 @@ pip install -r requirements.txt
 
 ### 2. 训练
 
-使用当前降误差 v2 配置训练：
+使用当前推荐的 v5 创新主干配置训练：
 
 ```bash
-python train.py --config configs/train_librispeech_subject003_cipic_reverb_demand50h_v2.yaml
+python train.py --config configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml
 ```
 
-从 best 恢复并使用安全参数：
+从 best 恢复并继续训练：
 
 ```bash
 python train.py \
-  --config configs/train_librispeech_subject003_cipic_reverb_demand50h_v2.yaml \
-  --resume outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v2/best.pth \
-  --train.amp false \
-  --train.grad_clip 1.0
+  --config configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml \
+  --resume outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl/best.pth \
+  --train.epochs 30
 ```
 
 ### 3. 评估
 
 ```bash
 python evaluate.py \
-  --checkpoint outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v2/best.pth \
-  --config configs/train_librispeech_subject003_cipic_reverb_demand50h_v2.yaml \
-  --output.log_dir outputs/logs_librispeech_subject003_cipic_reverb_demand50h_v2_test_full_best
+  --checkpoint outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl/best.pth \
+  --config configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml \
+  --output.log_dir outputs/logs_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl_test_full_best
 ```
 
-### 4. 一键流水线
+### 4. 流水线
 
 - 50h CIPIC + 混响：
 
@@ -146,30 +175,37 @@ python evaluate.py \
 bash run_cipic_reverb50h_pipeline.sh
 ```
 
-- 50h CIPIC + 混响 + DEMAND（v1）：
+- 50h CIPIC + 混响 + DEMAND（v5 创新主干）：
 
 ```bash
-bash run_cipic_reverb_demand50h_pipeline.sh
-```
-
-- 50h CIPIC + 混响 + DEMAND（v2 降误差）：
-
-```bash
-bash run_cipic_reverb_demand50h_v2_pipeline.sh
+bash run_cipic_reverb_demand50h_v5_pipeline.sh  # 待补充
 ```
 
 ## 当前推荐配置
 
-推荐使用：
+推荐使用 **v5（创新主干架构）**：
 
-- `configs/train_librispeech_subject003_cipic_reverb_demand50h_v2.yaml`
+- `configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml`
 
-该配置核心策略：
+核心配置特点：
 
-- 更保守学习率（`lr: 0.0005`）
-- 关闭 AMP（`amp: false`）
-- 更严格梯度裁剪（`grad_clip: 1.0`）
-- 启用训练期前后对向惩罚（`anti_confusion_weight: 1.0`）
+```yaml
+model:
+  use_attention_bias: true         # 低秩双向 attention bias
+  attention_bias_rank: 16
+  use_attention_pooling: true      # BiGRU 后 attention pooling
+  use_gating: true                 # 双向独立残差门控
+  gru_hidden_size: 128
+  
+train:
+  lr: 0.0005                       # 保守学习率
+  amp: false                        # 关闭 AMP，稳定数值
+  grad_clip: 1.0                   # 严格梯度裁剪
+  circular_soft_label_weight: 0.2  # 圆形软标签权重
+  circular_kappa: 4.0              # von Mises 浓度参数
+  anti_confusion_weight: 1.0       # 前后对向惩罚
+  early_stopping_patience: 15      # 早停耐心度
+```
 
 ## 项目结构
 
@@ -187,11 +223,16 @@ DOA-net/
 ├── run_cipic_reverb50h_pipeline.sh
 ├── run_cipic_reverb_demand50h_pipeline.sh
 ├── run_cipic_reverb_demand50h_v2_pipeline.sh
+├── run_cipic_reverb_demand50h_v3_regression_pipeline.sh
+├── run_cipic_reverb_demand50h_v4_enhanced_features_pipeline.sh
 ├── configs/
 │   ├── default.yaml
 │   ├── train_librispeech_subject003_cipic_reverb50h.yaml
 │   ├── train_librispeech_subject003_cipic_reverb_demand50h.yaml
-│   └── train_librispeech_subject003_cipic_reverb_demand50h_v2.yaml
+│   ├── train_librispeech_subject003_cipic_reverb_demand50h_v2.yaml
+│   ├── train_librispeech_subject003_cipic_reverb_demand50h_v3_regression.yaml
+│   ├── train_librispeech_subject003_cipic_reverb_demand50h_v4_enhanced_features.yaml
+│   └── train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml  ★
 ├── dataset/
 ├── engine/
 ├── models/
@@ -204,10 +245,22 @@ DOA-net/
 
 - 本 README 已聚焦当前主线实验与可复现流程。
 - 早期 static 数据集路线与早期后处理式混淆修正说明已移除。
+- v5 是当前架构创新的最新成果，相比 v2 基线在 MAE、accuracy、精准误差占比上有全面改进。
+- 详细的版本对比分析见：`v5_comparison_analysis.md`
 - 如需回溯历史实验，可查看 `outputs/` 下对应日志目录。
 
 ---
 
-最后更新：2026-04-10
-当前推荐 best：
-`outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v2/best.pth`
+最后更新：2026-04-15  
+当前推荐 best：  
+`outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl/best.pth`
+
+**推荐配置：**  
+`configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml`
+
+**关键指标（v5 测试集）：**
+- Accuracy: 0.7344
+- Top-3 Accuracy: 0.8744
+- MAE: 8.72°
+- Median Error: 2.14°
+- Error < 5° 占比: 80.5%

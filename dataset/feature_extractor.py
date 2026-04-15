@@ -1,10 +1,15 @@
 """双耳（立体声）音频的特征提取。
 
-提取四种时频表示：
+提取四种基础时频表示：
   1. 左耳对数幅度谱
   2. 右耳对数幅度谱
   3. IPD（双耳相位差）
   4. ILD（双耳级差）
+
+并额外提供增强双耳特征：
+    5. sin(IPD)
+    6. cos(IPD)
+    7. Coherence（双耳相干性）
 
 所有特征共享相同的时频网格，因此可以堆叠或拼接后传入下游模块。
 
@@ -68,6 +73,9 @@ class FeatureExtractor:
             * ``"log_mag_R"``  — ``[T, F]``  右耳对数幅度谱
             * ``"ipd"``        — ``[T, F]``  双耳相位差
             * ``"ild"``        — ``[T, F]``  双耳级差（dB）
+            * ``"ipd_sin"``    — ``[T, F]``  IPD 的正弦表示
+            * ``"ipd_cos"``    — ``[T, F]``  IPD 的余弦表示
+            * ``"coherence"``  — ``[T, F]``  双耳相干性
         """
         assert audio.ndim == 2 and audio.shape[0] == 2, \
             f"Expected audio shape [2, N], got {audio.shape}"
@@ -90,15 +98,26 @@ class FeatureExtractor:
         cross = spec_L * spec_R.conj()  # [F, T]
         ipd = torch.angle(cross).transpose(0, 1)  # [T, F]，弧度制 [-pi, pi]
 
+        # 使用 sin/cos 形式缓解相位在 ±pi 处的不连续
+        ipd_sin = torch.sin(ipd)  # [T, F]
+        ipd_cos = torch.cos(ipd)  # [T, F]
+
         # ILD = 20 * log10(|mag_L| / |mag_R|)
         ild = 20.0 * torch.log10((mag_L + eps) / (mag_R + eps))  # [F, T]
         ild = ild.transpose(0, 1)  # [T, F]
+
+        # 双耳相干性: |E[LR*]| / sqrt(E[|L|^2]E[|R|^2]) 的瞬时近似
+        coherence = (cross.abs() / (mag_L * mag_R + eps)).transpose(0, 1)  # [T, F]
+        coherence = coherence.clamp_(0.0, 1.0)
 
         return {
             "log_mag_L": log_mag_L,   # [T, F]
             "log_mag_R": log_mag_R,   # [T, F]
             "ipd": ipd,               # [T, F]
             "ild": ild,               # [T, F]
+            "ipd_sin": ipd_sin,       # [T, F]
+            "ipd_cos": ipd_cos,       # [T, F]
+            "coherence": coherence,   # [T, F]
         }
 
     @property

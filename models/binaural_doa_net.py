@@ -22,6 +22,7 @@ Forward 输出：
 import torch
 import torch.nn as nn
 from typing import Dict
+import math
 
 from models.encoder import BinauralEncoder
 from models.difference_prior import IPDILDProjection, DifferencePrior
@@ -64,6 +65,13 @@ class BinauralDOANet(nn.Module):
         dropout: float = 0.2,
         # 回归
         use_regression: bool = False,
+        # 增强双耳特征
+        use_enhanced_binaural_features: bool = False,
+        # Attention bias
+        use_attention_bias: bool = True,
+        attention_bias_rank: int = 16,
+        # 时序池化
+        use_attention_pooling: bool = True,
     ):
         super().__init__()
         if encoder_channels is None:
@@ -77,10 +85,20 @@ class BinauralDOANet(nn.Module):
             dropout=dropout,
         )
 
+        self.use_enhanced_binaural_features = use_enhanced_binaural_features
+
+        # 增强特征开启时：
+        # ipd 输入 = [ipd, sin(ipd), cos(ipd), coherence] -> 4F
+        # ild 输入 = [ild, coherence] -> 2F
+        ipd_in_bins = freq_bins * 4 if self.use_enhanced_binaural_features else freq_bins
+        ild_in_bins = freq_bins * 2 if self.use_enhanced_binaural_features else freq_bins
+
         # --- 2. IPD / ILD 投影 ---
         self.ipd_ild_proj = IPDILDProjection(
             freq_bins=freq_bins,
             proj_dim=proj_dim,
+            ipd_in_bins=ipd_in_bins,
+            ild_in_bins=ild_in_bins,
         )
 
         # --- 3. 差异先验 ---
@@ -98,6 +116,16 @@ class BinauralDOANet(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
         )
+
+        # --- 4.1 差异先验引导的双向attention bias ---
+        self.use_attention_bias = use_attention_bias
+        self.attention_bias_rank = max(int(attention_bias_rank), 1)
+        if self.use_attention_bias:
+            r = self.attention_bias_rank
+            self.bias_u_lr = nn.Linear(prior_out_dim, r)
+            self.bias_v_lr = nn.Linear(prior_out_dim, r)
+            self.bias_u_rl = nn.Linear(prior_out_dim, r)
+            self.bias_v_rl = nn.Linear(prior_out_dim, r)
 
         # --- 5. 门控 ---
         self.use_gating = use_gating
@@ -122,7 +150,23 @@ class BinauralDOANet(nn.Module):
             gru_dropout=gru_dropout,
             dropout=dropout,
             use_regression=use_regression,
+            use_attention_pooling=use_attention_pooling,
         )
+
+    def _build_attention_bias(self, d_feat: torch.Tensor) -> tuple:
+        """由差异先验生成双向低秩attention score bias。"""
+        # d_feat: [B, T, Dp]
+        r = float(self.attention_bias_rank)
+
+        u_lr = self.bias_u_lr(d_feat)  # [B, T, r]
+        v_lr = self.bias_v_lr(d_feat)  # [B, T, r]
+        bias_lr = torch.matmul(u_lr, v_lr.transpose(1, 2)) / math.sqrt(r)
+
+        u_rl = self.bias_u_rl(d_feat)  # [B, T, r]
+        v_rl = self.bias_v_rl(d_feat)  # [B, T, r]
+        bias_rl = torch.matmul(u_rl, v_rl.transpose(1, 2)) / math.sqrt(r)
+
+        return bias_lr, bias_rl
 
     def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
@@ -152,6 +196,29 @@ class BinauralDOANet(nn.Module):
         ipd_aligned = ipd[:, :T_enc, :]   # [B, T', F]
         ild_aligned = ild[:, :T_enc, :]   # [B, T', F]
 
+        if self.use_enhanced_binaural_features:
+            # 若batch中未提供增强特征，则退化为在线构造以保证兼容。
+            coh = batch.get("coherence")
+            if coh is None:
+                coh = torch.ones_like(ipd_aligned)
+            else:
+                coh = coh[:, :T_enc, :]
+
+            ipd_sin = batch.get("ipd_sin")
+            if ipd_sin is None:
+                ipd_sin = torch.sin(ipd_aligned)
+            else:
+                ipd_sin = ipd_sin[:, :T_enc, :]
+
+            ipd_cos = batch.get("ipd_cos")
+            if ipd_cos is None:
+                ipd_cos = torch.cos(ipd_aligned)
+            else:
+                ipd_cos = ipd_cos[:, :T_enc, :]
+
+            ipd_aligned = torch.cat([ipd_aligned, ipd_sin, ipd_cos, coh], dim=-1)
+            ild_aligned = torch.cat([ild_aligned, coh], dim=-1)
+
         # ---- 第 2 步: IPD / ILD 投影 ----
         ipd_proj, ild_proj = self.ipd_ild_proj(ipd_aligned, ild_aligned)
         # ipd_proj: [B, T', proj_dim],  ild_proj: [B, T', proj_dim]
@@ -159,12 +226,17 @@ class BinauralDOANet(nn.Module):
         # ---- 第 3 步: 差异先验 ----
         d_feat = self.diff_prior(f_l, f_r, ipd_proj, ild_proj)  # [B, T', prior_out_dim]
 
-        # ---- 第 4 步: 双向交叉注意力 ----
-        a_lr, a_rl = self.cross_attn(f_l, f_r)  # 各 [B, T', D_enc]
+        # ---- 第 4 步: 双向交叉注意力（可选score bias）----
+        if self.use_attention_bias:
+            bias_lr, bias_rl = self._build_attention_bias(d_feat)
+        else:
+            bias_lr, bias_rl = None, None
+
+        a_lr, a_rl = self.cross_attn(f_l, f_r, bias_lr=bias_lr, bias_rl=bias_rl)  # 各 [B, T', D_enc]
 
         # ---- 第 5 步: 门控 ----
         if self.use_gating:
-            gated_a_lr, gated_a_rl = self.gating(d_feat, a_lr, a_rl)
+            gated_a_lr, gated_a_rl = self.gating(d_feat, a_lr, a_rl, f_l, f_r)
             # 各 [B, T', gate_dim]
         else:
             # 门控消融：直接使用注意力输出，不做调制
@@ -205,6 +277,10 @@ def build_model(cfg) -> BinauralDOANet:
     # 检查是否启用回归
     use_regression = getattr(m, 'use_regression', False)
     use_gating = getattr(m, 'use_gating', True)
+    use_enhanced_binaural_features = getattr(m, 'use_enhanced_binaural_features', False)
+    use_attention_bias = getattr(m, 'use_attention_bias', True)
+    attention_bias_rank = getattr(m, 'attention_bias_rank', 16)
+    use_attention_pooling = getattr(m, 'use_attention_pooling', True)
 
     return BinauralDOANet(
         freq_bins=freq_bins,
@@ -223,4 +299,8 @@ def build_model(cfg) -> BinauralDOANet:
         num_classes=m.num_classes,
         dropout=m.dropout,
         use_regression=use_regression,
+        use_enhanced_binaural_features=use_enhanced_binaural_features,
+        use_attention_bias=use_attention_bias,
+        attention_bias_rank=attention_bias_rank,
+        use_attention_pooling=use_attention_pooling,
     )

@@ -300,6 +300,9 @@ class StaticDOADataset(Dataset):
             "log_mag_R": feats["log_mag_R"],   # [T, F]
             "ipd": feats["ipd"],               # [T, F]
             "ild": feats["ild"],               # [T, F]
+            "ipd_sin": feats["ipd_sin"],       # [T, F]
+            "ipd_cos": feats["ipd_cos"],       # [T, F]
+            "coherence": feats["coherence"],   # [T, F]
             "azimuth_label": seg["azimuth_label"],
             "azimuth_deg": seg["azimuth_deg"],
         }

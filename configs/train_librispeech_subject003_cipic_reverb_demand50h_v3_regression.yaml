@@ -1,0 +1,66 @@
+# ==============================================================================
+# 模型改动实验v3：在v2主线基础上启用回归分支（分类+回归多任务）
+# 目标：在保持稳定训练的同时，进一步降低角度误差长尾。
+# ==============================================================================
+
+dataset:
+  root_dir: "/disk2/bywang/DOA-net/data/librispeech_cipic_subject003_reverb_demand50h_v2"
+  sample_rate: 16000
+  segment_seconds: 2.0
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  split_seed: 42
+  dataset_type: "static"
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: "hann"
+
+model:
+  encoder_channels: [32, 64, 128]
+  encoder_out_dim: 128
+  proj_dim: 128
+  prior_hidden_dim: 256
+  prior_out_dim: 128
+  attention_dim: 128
+  num_heads: 4
+  gate_dim: 128
+  use_gating: true
+  gru_hidden_size: 128
+  gru_num_layers: 2
+  gru_dropout: 0.1
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.2
+  use_regression: true
+
+train:
+  batch_size: 32
+  num_workers: 4
+  epochs: 100
+  lr: 0.0005
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+
+  # 回归分支权重，建议先从0.3开始，避免回归项过强压制分类。
+  regression_weight: 0.3
+  use_angular_loss: true
+
+  scheduler: "cosine"
+  cosine_T_max: 100
+  cosine_eta_min: 0.00001
+
+  amp: false
+  device: "cuda"
+  grad_clip: 1.0
+
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+
+output:
+  save_dir: "outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v3_regression"
+  log_dir: "outputs/logs_librispeech_subject003_cipic_reverb_demand50h_v3_regression"

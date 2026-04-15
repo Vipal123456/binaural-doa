@@ -1,9 +1,9 @@
-"""时序建模（BiGRU）+ 分类头。
+"""时序建模（BiGRU）+ Attention Pooling + 分类头。
 
 接收融合后的特征序列，输出逐帧或逐片段的方位角 logits。
 
 输入 shape:  ``[B, T, D_fused]``
-输出 shape:  ``[B, num_classes]``  （时间均值池化后的片段级预测）
+输出 shape:  ``[B, num_classes]``  （时间池化后的片段级预测）
 """
 
 import torch
@@ -29,6 +29,8 @@ class TemporalHead(nn.Module):
         分类头前的 Dropout。
     use_regression : bool
         是否使用回归头输出连续角度值。
+    use_attention_pooling : bool
+        是否使用注意力池化（否则退化为时间均值池化）。
     """
 
     def __init__(
@@ -40,9 +42,11 @@ class TemporalHead(nn.Module):
         gru_dropout: float = 0.1,
         dropout: float = 0.2,
         use_regression: bool = False,
+        use_attention_pooling: bool = True,
     ):
         super().__init__()
         self.use_regression = use_regression
+        self.use_attention_pooling = use_attention_pooling
 
         self.gru = nn.GRU(
             input_size=input_dim,
@@ -57,6 +61,15 @@ class TemporalHead(nn.Module):
         gru_out_dim = 2 * gru_hidden_size
 
         self.dropout = nn.Dropout(dropout)
+
+        # Attention Pooling: 对时间维进行可学习加权聚合
+        if self.use_attention_pooling:
+            attn_hidden = max(gru_out_dim // 2, 32)
+            self.attn_pool = nn.Sequential(
+                nn.Linear(gru_out_dim, attn_hidden),
+                nn.Tanh(),
+                nn.Linear(attn_hidden, 1),
+            )
 
         # 分类头：输出离散的方位角类别
         self.classifier = nn.Linear(gru_out_dim, num_classes)
@@ -83,8 +96,13 @@ class TemporalHead(nn.Module):
         """
         # 输入 shape: [B, T, D_fused]
         gru_out, _ = self.gru(x)          # [B, T, 2*H]
-        # 对时间维进行均值池化，得到片段级预测
-        pooled = gru_out.mean(dim=1)      # [B, 2*H]
+        # 对时间维进行池化，得到片段级预测
+        if self.use_attention_pooling:
+            attn_logits = self.attn_pool(gru_out)          # [B, T, 1]
+            attn_weights = torch.softmax(attn_logits, dim=1)
+            pooled = (attn_weights * gru_out).sum(dim=1)   # [B, 2*H]
+        else:
+            pooled = gru_out.mean(dim=1)                   # [B, 2*H]
         pooled = self.dropout(pooled)     # [B, 2*H]
 
         # 分类输出
