@@ -32,6 +32,8 @@ model:
   num_heads: 4
   gate_dim: 128
   use_gating: true
+  use_independent_gating: true
+  use_residual_gating: true
   use_attention_bias: true
   attention_bias_rank: 16
   use_attention_pooling: true

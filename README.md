@@ -143,6 +143,82 @@ v5 在上述基础上引入的核心改进：
 
 **结论：** v5 以最优的参数高效性和推理成本，实现了最佳的精度性能，适合生产和边缘设备部署。
 
+## 消融实验方案
+
+### 实验目标
+
+验证 v5 的四个核心改动各自带来的收益，并分离它们的独立贡献与组合增益：
+
+1. Attention Bias 注入
+2. 双向独立残差门控
+3. Attention Pooling
+4. Circular Soft Label Loss
+
+### 固定条件
+
+所有消融实验必须保持以下条件完全一致：
+
+- 数据集：`data/librispeech_cipic_subject003_reverb_demand50h_v2`
+- 划分：train/val/test = 70/15/15
+- 输入特征：`log_mag_L, log_mag_R, IPD, ILD`
+- 训练策略：`lr=0.0005`, `amp=false`, `grad_clip=1.0`, `label_smoothing=0.1`
+- 早停策略：`patience=15`
+- 评估指标：Accuracy、Top-3 Accuracy、MAE、Median Error、error<5°、error<10°
+
+### 具体消融组
+
+下面把 v2 风格主干作为基线，然后逐项叠加 v5 改动。这里把门控拆成两个独立维度：
+
+- `use_independent_gating=false`：共享门控
+- `use_residual_gating=false`：非残差门控（g * a）
+
+| 组别 | Attention Bias | 独立门控 | 残差门控 | Attention Pooling | Circular Soft Label | 说明 |
+|------|----------------|---------|---------|-------------------|---------------------|------|
+| A0 | 关闭 | 关闭 | 关闭 | 关闭 | 关闭 | 共享非残差门控基线 |
+| A1 | 开启 | 关闭 | 关闭 | 关闭 | 关闭 | 只验证 attention bias |
+| A2 | 关闭 | 开启 | 开启 | 关闭 | 关闭 | 只验证独立残差门控 |
+| A3 | 关闭 | 关闭 | 关闭 | 开启 | 关闭 | 只验证 attention pooling |
+| A4 | 关闭 | 关闭 | 关闭 | 关闭 | 开启 | 只验证 circular soft label |
+| A5 | 开启 | 开启 | 开启 | 关闭 | 关闭 | 验证 bias + 独立门控协同 |
+| A6 | 开启 | 开启 | 开启 | 开启 | 关闭 | 验证 bias + 门控 + pooling |
+| **A7** | **开启** | **开启** | **开启** | **开启** | **开启** | **完整 v5** |
+
+### 具体运行方式
+
+每组实验都可以通过统一脚本启动：
+
+```bash
+bash run_cipic_reverb_demand50h_ablation_pipeline.sh a0 smoke
+bash run_cipic_reverb_demand50h_ablation_pipeline.sh a7 smoke
+```
+
+如果要直接进入完整训练：
+
+```bash
+bash run_cipic_reverb_demand50h_ablation_pipeline.sh a0 full
+```
+
+### 结果记录建议
+
+建议每组记录以下内容：
+
+- 最佳验证轮次
+- 最佳验证 MAE
+- 最终测试集 Accuracy / Top-3 / MAE / Median Error
+- `error<5°` 和 `error<10°`
+- 参数量与推理耗时
+
+### 判定标准
+
+优先以以下顺序判断方案是否有效：
+
+1. MAE 是否下降
+2. `error<5°` 是否上升
+3. Accuracy 是否上升
+4. 参数量是否显著增加
+
+如果某一改动只提升 Accuracy 但恶化 MAE，则不建议作为主干保留。
+
 ## 数据与实验主线
 
 ### 数据来源
@@ -267,6 +343,7 @@ DOA-net/
 ├── run_cipic_reverb_demand50h_v2_pipeline.sh
 ├── run_cipic_reverb_demand50h_v3_regression_pipeline.sh
 ├── run_cipic_reverb_demand50h_v4_enhanced_features_pipeline.sh
+├── run_cipic_reverb_demand50h_ablation_pipeline.sh
 ├── configs/
 │   ├── default.yaml
 │   ├── train_librispeech_subject003_cipic_reverb50h.yaml

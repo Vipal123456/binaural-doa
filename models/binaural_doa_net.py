@@ -55,6 +55,8 @@ class BinauralDOANet(nn.Module):
         # 门控
         gate_dim: int = 128,
         use_gating: bool = True,
+        use_independent_gating: bool = True,
+        use_residual_gating: bool = True,
         # 时序头
         gru_hidden_size: int = 128,
         gru_num_layers: int = 2,
@@ -133,6 +135,8 @@ class BinauralDOANet(nn.Module):
             self.gating = GatingModule(
                 prior_dim=prior_out_dim,
                 gate_dim=gate_dim,
+                use_independent_gating=use_independent_gating,
+                use_residual_gating=use_residual_gating,
             )
         else:
             self.gating = None
@@ -277,6 +281,8 @@ def build_model(cfg) -> BinauralDOANet:
     # 检查是否启用回归
     use_regression = getattr(m, 'use_regression', False)
     use_gating = getattr(m, 'use_gating', True)
+    use_independent_gating = getattr(m, 'use_independent_gating', True)
+    use_residual_gating = getattr(m, 'use_residual_gating', True)
     use_enhanced_binaural_features = getattr(m, 'use_enhanced_binaural_features', False)
     use_attention_bias = getattr(m, 'use_attention_bias', True)
     attention_bias_rank = getattr(m, 'attention_bias_rank', 16)
@@ -293,6 +299,8 @@ def build_model(cfg) -> BinauralDOANet:
         num_heads=m.num_heads,
         gate_dim=m.gate_dim,
         use_gating=use_gating,
+        use_independent_gating=use_independent_gating,
+        use_residual_gating=use_residual_gating,
         gru_hidden_size=m.gru_hidden_size,
         gru_num_layers=m.gru_num_layers,
         gru_dropout=m.gru_dropout,
