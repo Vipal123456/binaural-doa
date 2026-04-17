@@ -3,7 +3,8 @@
 指标:
   1. 分类准确率
   2. Top-k 准确率
-  3. 平均角度误差（MAE，单位为度，考虑圆周特性）
+    3. 平均角度误差（MAE，单位为度，考虑圆周特性）
+    4. 宏平均精确率 / 召回率 / F1（Macro Precision/Recall/F1）
 """
 
 import numpy as np
@@ -93,6 +94,38 @@ class DOAMetrics:
 
         # --- 1. 准确率 ---
         results["accuracy"] = float((pred_bins == true_bins).sum()) / max(N, 1)
+
+        # --- 1.1 宏平均 P/R/F1 ---
+        cm = np.zeros((self.num_classes, self.num_classes), dtype=np.int64)
+        for t, p in zip(true_bins, pred_bins):
+            cm[t, p] += 1
+
+        tp = np.diag(cm).astype(np.float64)
+        fp = cm.sum(axis=0).astype(np.float64) - tp
+        fn = cm.sum(axis=1).astype(np.float64) - tp
+
+        precision_per_class = np.divide(
+            tp,
+            tp + fp,
+            out=np.zeros_like(tp, dtype=np.float64),
+            where=(tp + fp) > 0,
+        )
+        recall_per_class = np.divide(
+            tp,
+            tp + fn,
+            out=np.zeros_like(tp, dtype=np.float64),
+            where=(tp + fn) > 0,
+        )
+        f1_per_class = np.divide(
+            2.0 * precision_per_class * recall_per_class,
+            precision_per_class + recall_per_class,
+            out=np.zeros_like(tp, dtype=np.float64),
+            where=(precision_per_class + recall_per_class) > 0,
+        )
+
+        results["macro_precision"] = float(precision_per_class.mean())
+        results["macro_recall"] = float(recall_per_class.mean())
+        results["macro_f1"] = float(f1_per_class.mean())
 
         # --- 2. Top-k 准确率 ---
         top_k_preds = np.argsort(logits, axis=-1)[:, -self.top_k:]  # [N, k]
