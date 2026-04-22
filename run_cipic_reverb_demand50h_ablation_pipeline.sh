@@ -118,7 +118,7 @@ if [[ "$mode" == "smoke" ]]; then
   summary_csv="${log_dir}/smoke_summary.csv"
   summary_md="${log_dir}/smoke_summary.md"
   : > "$summary_csv"
-  echo "seed,accuracy,top_k_accuracy,mean_angular_error,median_angular_error,error_lt_5,error_lt_10" >> "$summary_csv"
+  echo "seed,accuracy,top_k_accuracy,macro_precision,macro_recall,macro_f1,mean_angular_error,median_angular_error,error_lt_5,error_lt_10" >> "$summary_csv"
 
   for seed in "${seeds[@]}"; do
     seed="$(echo "$seed" | xargs)"
@@ -156,6 +156,9 @@ seed, log_path, out_csv = sys.argv[1:4]
 keys = [
     "accuracy",
     "top_k_accuracy",
+  "macro_precision",
+  "macro_recall",
+  "macro_f1",
     "mean_angular_error",
     "median_angular_error",
     "error_lt_5",
@@ -178,7 +181,8 @@ if missing:
 
 with open(out_csv, "a", encoding="utf-8") as f:
     f.write(
-        f"{seed},{vals['accuracy']:.6f},{vals['top_k_accuracy']:.6f},"
+      f"{seed},{vals['accuracy']:.6f},{vals['top_k_accuracy']:.6f},"
+      f"{vals['macro_precision']:.6f},{vals['macro_recall']:.6f},{vals['macro_f1']:.6f},"
         f"{vals['mean_angular_error']:.6f},{vals['median_angular_error']:.6f},"
         f"{vals['error_lt_5']:.6f},{vals['error_lt_10']:.6f}\n"
     )
@@ -200,6 +204,9 @@ with open(csv_path, "r", encoding="utf-8") as f:
 metrics = [
     "accuracy",
     "top_k_accuracy",
+  "macro_precision",
+  "macro_recall",
+  "macro_f1",
     "mean_angular_error",
     "median_angular_error",
     "error_lt_5",
@@ -218,11 +225,12 @@ with open(md_path, "w", encoding="utf-8") as f:
     f.write(f"- epochs: {smoke_epochs}\\n")
     f.write(f"- seeds: {seeds_csv}\\n\\n")
     f.write("## Per-seed\\n\\n")
-    f.write("| seed | accuracy | top_k_accuracy | mean_angular_error | median_angular_error | error_lt_5 | error_lt_10 |\\n")
-    f.write("|---|---:|---:|---:|---:|---:|---:|\\n")
+    f.write("| seed | accuracy | top_k_accuracy | macro_precision | macro_recall | macro_f1 | mean_angular_error | median_angular_error | error_lt_5 | error_lt_10 |\n")
+    f.write("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
     for r in rows:
       f.write(
-          f"| {r['seed']} | {float(r['accuracy']):.4f} | {float(r['top_k_accuracy']):.4f} | "
+        f"| {r['seed']} | {float(r['accuracy']):.4f} | {float(r['top_k_accuracy']):.4f} | "
+        f"{float(r['macro_precision']):.4f} | {float(r['macro_recall']):.4f} | {float(r['macro_f1']):.4f} | "
           f"{float(r['mean_angular_error']):.4f} | {float(r['median_angular_error']):.4f} | "
           f"{float(r['error_lt_5']):.4f} | {float(r['error_lt_10']):.4f} |\\n"
       )

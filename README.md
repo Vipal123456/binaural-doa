@@ -296,6 +296,50 @@ SMOKE_EPOCHS=5 bash run_cipic_reverb_demand50h_ablation_pipeline.sh a7 smoke 42,
 
 ## 数据与实验主线
 
+## 泛化诊断实验（speaker/noise/subject）
+
+已提供可直接执行的三组诊断脚本：
+
+- speaker overlap vs disjoint
+- clean-trained vs mixed-trained
+- single-subject vs cross-subject
+
+详细步骤与命令见：
+
+- `docs/GENERALIZATION_DIAGNOSTICS.md`
+
+核心脚本：
+
+- `tools/diagnostics/prepare_librispeech_speaker_splits.py`
+- `tools/diagnostics/prepare_diagnostic_datasets.sh`
+- `tools/diagnostics/run_generalization_diagnostics.sh`
+
+### 已完成诊断结果（2026-04-21）
+
+诊断设置：`DIAG_EPOCHS=3`，seeds=`42,43`。
+
+结果文件：
+
+- `outputs/diagnostics/speaker_overlap_vs_disjoint.md`
+- `outputs/diagnostics/clean_trained_vs_mixed_trained.md`
+- `outputs/diagnostics/single_subject_vs_cross_subject.md`
+- `docs/GENERALIZATION_RESULTS_REPORT.md`
+
+关键结论（以 MAE 差值为主）：
+
+1. 噪声/混响敏感性最高：
+  - `30.8971° (clean-trained on robust test) - 12.3871° (mixed-trained on robust test) = +18.5100°`
+2. HRTF 泛化敏感性次高：
+  - `36.0037° (single-subject on unseen subject) - 19.6063° (cross-subject on unseen subject) = +16.3975°`
+3. speaker overlap/disjoint 在本轮中未表现为主要瓶颈：
+  - `32.2503° (disjoint) - 34.2873° (overlap) = -2.0370°`
+
+诊断优先级：
+
+1. 优先优化噪声/混响鲁棒性
+2. 其次优化 cross-subject HRTF 泛化
+3. 对 speaker 诊断做更严格配平后再复验
+
 ### 数据来源
 
 - 语音：LibriSpeech `train-clean-100`
