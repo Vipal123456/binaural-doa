@@ -4,6 +4,7 @@
 当前主线已从早期静态数据实验迁移到 50h 规模的合成数据流程，重点是：
 
 - CIPIC(subject_003) 空间化
+- CIPIC 多 subject / subject-disjoint 泛化
 - 房间混响增强
 - DEMAND 真实场景噪声增强
 - 训练稳定性与长尾误差抑制
@@ -22,6 +23,119 @@
 5. 完成了回归分支实验（v3，分类+DOA回归），相比v2 accuracy稍升但MAE未改善。
 6. 完成了增强输入特征实验（v4，IPD sin/cos + coherence），结果接近v2基线。
 7. **完成了创新主干结构实验（v5，attention bias + 独立门控 + attention pooling + 圆形软标签）**
+8. **完成了 robust50h 多 subject、subject-disjoint 数据集与 unseen-subject 评估主线**
+   - 新数据集：`data/librispeech_cipic_multisubject_robust50h_v1`
+   - 30 个 subject，按 `24 / 3 / 3` 做 train / val / test subject-disjoint 划分
+   - 新增 `train_root / val_root / test_root` 显式 split-root 加载方式
+   - v5 baseline 在 unseen-subject test 上达到：`MAE=15.90°`，`median=2.50°`，`error<10°=82.66%`
+   - **enhanced binaural features** 版本在 unseen-subject test 上进一步达到：`MAE=13.77°`，`median=2.50°`，`error<10°=85.28%`
+
+## 新增主线：robust50h 多 subject / unseen-subject 泛化
+
+### 数据集设计
+
+当前仓库已支持新的 robust50h 多 subject 数据主线：
+
+- 数据集根目录：
+  - `data/librispeech_cipic_multisubject_robust50h_v1`
+- 语音：
+  - `LibriSpeech/train-clean-100`
+- HRTF：
+  - `/disk2/bywang/data/HRTF/subject_*.sofa`
+- 噪声：
+  - `DEMAND`
+- 采样率：
+  - `16 kHz`
+- 单条音频长度：
+  - `10 s`
+- 训练片段长度：
+  - `2 s`
+- 总规模：
+  - `18,000` 条，约 `50 h`
+
+### 真实几何设置
+
+这版 robust50h 数据集不是“固定接收者位置”，而是：
+
+- 接收者平面位置随机
+- 接收者高度固定 `1.5 m`
+- 头朝向固定
+- 声源距离 `1.0 - 1.5 m`
+- 声源与接收者都在水平面
+- 不变量：
+  - `metadata_azimuth == HRTF_azimuth == room_source_azimuth`
+
+对应生成脚本：
+
+- `prepare_robust_multisubject_dataset.py`
+
+### subject-disjoint 划分
+
+当前 robust50h v1 使用 30 个 subject：
+
+- train subjects: `24`
+- val subjects: `3`
+- test subjects unseen: `3`
+
+其中 test subject 在训练中完全不可见，用于评估 HRTF 泛化能力。
+
+### robust50h v5 结果（已完成）
+
+训练配置：
+
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml`
+
+baseline 最佳验证结果：
+
+- best epoch: `17`
+- val MAE: `10.49°`
+
+baseline unseen-subject test（best checkpoint）：
+
+- Accuracy: `0.6198`
+- Top-3 Accuracy: `0.9028`
+- MAE: `15.90°`
+- Median Error: `2.50°`
+- Error < 5°: `71.20%`
+- Error < 10°: `82.66%`
+
+enhanced binaural features（`configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml`）：
+
+- best epoch: `21`
+- val MAE: `10.65°`
+- unseen-subject test Accuracy: `0.6432`
+- unseen-subject test Top-3 Accuracy: `0.8970`
+- unseen-subject test MAE: `13.77°`
+- unseen-subject test Median Error: `2.50°`
+- unseen-subject test Error < 5°: `72.73%`
+- unseen-subject test Error < 10°: `85.28%`
+
+结论：
+
+- `enhanced` 在验证集上没有超过 v5 baseline（`10.65°` vs `10.49°`）
+- 但在 unseen-subject test 上显著更好，尤其体现在 MAE 和长尾误差改善
+- 当前 robust50h 主线推荐 checkpoint 已更新为 enhanced 版本
+
+### 当前误差画像
+
+对 unseen-subject test 的错误分析表明，当前长尾大错主要集中在：
+
+- `large room`
+- 高 RT60（尤其 `0.65 - 0.80 s`）
+- 低 SNR（尤其 `[-10, -5] dB`）
+- 某些未见 subject
+- 前后对称方位角附近（如 `0° / 180°` 一带）
+
+相关输出目录：
+
+- `outputs/analysis_multisubject_robust50h_v5_test_best`
+
+其中已包含：
+
+- `per_segment_errors.csv`
+- `true_vs_pred_heatmap.png`
+- `front_back_zone_heatmap.png`
+- `front_back_confusion_rate_by_angle.png`
 
 ### 近期关键结果对比
 
@@ -38,6 +152,27 @@
 - ✓ accuracy 提升 3.9%（0.7067 → 0.7344）
 - ✓ error<5° 的精准定位能力提升 3.7%（77.6% → 80.5%）
 - ✓ 相比特征增强（v4）方案，架构创新显示出更强的优化潜力
+
+### robust50h unseen-subject 主线结果对比
+
+| 版本 | 配置 | Accuracy | Top-3 | MAE | Median | error<5° | error<10° | 说明 |
+|------|------|----------|-------|-----|--------|----------|-----------|------|
+| v5 baseline | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml` | 0.6198 | 0.9028 | 15.90° | 2.50° | 71.20% | 82.66% | 原 robust50h 主线 |
+| **v5 + enhanced features** | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml` | **0.6432** | 0.8970 | **13.77°** | 2.50° | **72.73%** | **85.28%** | 当前推荐 best |
+
+enhanced 相对 baseline 的变化：
+
+- Accuracy: `+2.34%`
+- MAE: `-2.13°`
+- Error < 5°: `+1.53%`
+- Error < 10°: `+2.62%`
+- Top-3 Accuracy: `-0.58%`
+
+解释：
+
+- enhanced 并没有提升 Top-3 宽容排序指标
+- 但它显著降低了最终角度误差，尤其减少了长尾大错
+- 这说明增强双耳特征更有利于 unseen-subject HRTF 泛化
 
 ## 模型架构
 
@@ -356,6 +491,8 @@ SMOKE_EPOCHS=5 bash run_cipic_reverb_demand50h_ablation_pipeline.sh a7 smoke 42,
   - `data/librispeech_cipic_subject003_reverb_demand50h`
 - 50h reverb+DEMAND（v2~v5，混合难度）
   - `data/librispeech_cipic_subject003_reverb_demand50h_v2`
+- 50h robust multisubject（subject-disjoint, unseen-subject）
+  - `data/librispeech_cipic_multisubject_robust50h_v1`
 
 ### 划分比例
 
@@ -364,6 +501,14 @@ SMOKE_EPOCHS=5 bash run_cipic_reverb_demand50h_ablation_pipeline.sh a7 smoke 42,
 - train: 70%
 - val: 15%
 - test: 15%
+
+对于 robust50h 多 subject 主线，使用的是 **subject-disjoint 显式 split-root**：
+
+- `train_root`
+- `val_root`
+- `test_root`
+
+此时不会再在单个 root 内做随机 70/15/15 划分。
 
 ### 采样率与片段长度
 
@@ -386,6 +531,18 @@ pip install -r requirements.txt
 python train.py --config configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml
 ```
 
+如果要训练多 subject / unseen-subject 泛化主线：
+
+```bash
+python train.py --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml
+```
+
+如果要做“只开启 enhanced binaural features”的单变量对照实验：
+
+```bash
+python train.py --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml
+```
+
 从 best 恢复并继续训练：
 
 ```bash
@@ -402,6 +559,15 @@ python evaluate.py \
   --checkpoint outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl/best.pth \
   --config configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml \
   --output.log_dir outputs/logs_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl_test_full_best
+```
+
+评估 robust50h unseen-subject test：
+
+```bash
+python evaluate.py \
+  --checkpoint outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_csl_fast/best.pth \
+  --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml \
+  --output.log_dir outputs/logs_multisubject_robust50h_v5_bias_gating_attnpool_csl_fast_test_best
 ```
 
 ### 4. 流水线
@@ -423,6 +589,7 @@ bash run_cipic_reverb_demand50h_v5_pipeline.sh  # 待补充
 推荐使用 **v5（创新主干架构）**：
 
 - `configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml`
 
 核心配置特点：
 
@@ -457,6 +624,7 @@ DOA-net/
 ├── metrics.py
 ├── synthesize_librispeech_cipic.py
 ├── prepare_demand_mixed_data.py
+├── prepare_robust_multisubject_dataset.py
 ├── run_cipic_reverb50h_pipeline.sh
 ├── run_cipic_reverb_demand50h_pipeline.sh
 ├── run_cipic_reverb_demand50h_v2_pipeline.sh
@@ -470,7 +638,9 @@ DOA-net/
 │   ├── train_librispeech_subject003_cipic_reverb_demand50h_v2.yaml
 │   ├── train_librispeech_subject003_cipic_reverb_demand50h_v3_regression.yaml
 │   ├── train_librispeech_subject003_cipic_reverb_demand50h_v4_enhanced_features.yaml
-│   └── train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml  ★
+│   ├── train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml
+│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml
+│   └── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml  ★
 ├── dataset/
 ├── engine/
 ├── models/
@@ -489,16 +659,31 @@ DOA-net/
 
 ---
 
-最后更新：2026-04-15  
-当前推荐 best：  
+最后更新：2026-04-26  
+
+当前推荐 best（subject_003 主线）：  
 `outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl/best.pth`
 
-**推荐配置：**  
-`configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml`
+当前推荐 best（robust50h unseen-subject 主线）：  
+`outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced/best.pth`
 
-**关键指标（v5 测试集）：**
-- Accuracy: 0.7344
-- Top-3 Accuracy: 0.8744
-- MAE: 8.72°
-- Median Error: 2.14°
-- Error < 5° 占比: 80.5%
+**推荐配置：**
+
+- `configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml`
+
+**关键指标：**
+
+- subject_003 v5 测试集：
+  - Accuracy: `0.7344`
+  - Top-3 Accuracy: `0.8744`
+  - MAE: `8.72°`
+  - Median Error: `2.14°`
+  - Error < 5° 占比: `80.5%`
+
+- robust50h v5 unseen-subject 测试集：
+  - Accuracy: `0.6432`
+  - Top-3 Accuracy: `0.8970`
+  - MAE: `13.77°`
+  - Median Error: `2.50°`
+  - Error < 10° 占比: `85.28%`

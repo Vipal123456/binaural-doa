@@ -1,9 +1,10 @@
 # ==============================================================================
-# LibriSpeech + CIPIC(subject_003) 训练配置（白噪声 SNR=10dB）
+# LibriSpeech + CIPIC(multi-subject) + 房间混响 + DEMAND噪声（50h）
+# 基于 subject003 reverb+demand 50h 的多 HRTF subject 泛化训练配置。
 # ==============================================================================
 
 dataset:
-  root_dir: "/disk2/bywang/DOA-net/data/librispeech_cipic_subject003"
+  root_dir: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_reverb_demand50h"
   sample_rate: 16000
   segment_seconds: 2.0
   train_ratio: 0.7
@@ -11,12 +12,6 @@ dataset:
   test_ratio: 0.15
   split_seed: 42
   dataset_type: "static"
-
-  # 白噪声注入配置
-  add_white_noise: true
-  white_noise_snr_db: 10.0
-  white_noise_prob: 1.0
-  white_noise_splits: ["train", "val", "test"]
 
 feature:
   n_fft: 512
@@ -42,10 +37,11 @@ model:
   dropout: 0.2
 
 train:
-  batch_size: 32
+  batch_size: 64
   num_workers: 4
   epochs: 100
-  lr: 0.001
+
+  lr: 0.0005
   weight_decay: 0.0001
   label_smoothing: 0.1
 
@@ -53,12 +49,16 @@ train:
   cosine_T_max: 100
   cosine_eta_min: 0.00001
 
-  amp: true
+  amp: false
   device: "cuda"
-  grad_clip: 5.0
+  grad_clip: 1.0
+
+  anti_confusion_weight: 1.0
+
   log_interval: 50
   val_interval: 1
+  early_stopping_patience: 15
 
 output:
-  save_dir: "outputs/checkpoints_librispeech_subject003_white10"
-  log_dir: "outputs/logs_librispeech_subject003_white10"
+  save_dir: "outputs/checkpoints_librispeech_multisubject_reverb_demand50h_v2"
+  log_dir: "outputs/logs_librispeech_multisubject_reverb_demand50h_v2"

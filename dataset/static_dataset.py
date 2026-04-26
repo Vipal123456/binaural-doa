@@ -167,7 +167,9 @@ class StaticDOADataset(Dataset):
         n_train = int(n * self.train_ratio)
         n_val = int(n * self.val_ratio)
 
-        if self.split == "train":
+        if self.split == "all":
+            selected = indices
+        elif self.split == "train":
             selected = indices[:n_train]
         elif self.split == "val":
             selected = indices[n_train:n_train + n_val]
@@ -411,8 +413,17 @@ def build_static_datasets(cfg) -> Tuple[Dataset, Dataset, Dataset]:
         white_noise_splits=ds_cfg.get("white_noise_splits", ["train"]),
     )
 
-    train_ds = StaticDOADataset(split="train", **common_kwargs)
-    val_ds = StaticDOADataset(split="val", **common_kwargs)
-    test_ds = StaticDOADataset(split="test", **common_kwargs)
+    train_root = ds_cfg.get("train_root", None)
+    val_root = ds_cfg.get("val_root", None)
+    test_root = ds_cfg.get("test_root", None)
+
+    if train_root and val_root and test_root:
+        train_ds = StaticDOADataset(split="all", **{**common_kwargs, "root_dir": train_root})
+        val_ds = StaticDOADataset(split="all", **{**common_kwargs, "root_dir": val_root})
+        test_ds = StaticDOADataset(split="all", **{**common_kwargs, "root_dir": test_root})
+    else:
+        train_ds = StaticDOADataset(split="train", **common_kwargs)
+        val_ds = StaticDOADataset(split="val", **common_kwargs)
+        test_ds = StaticDOADataset(split="test", **common_kwargs)
 
     return train_ds, val_ds, test_ds
