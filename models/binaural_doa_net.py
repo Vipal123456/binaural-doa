@@ -74,6 +74,8 @@ class BinauralDOANet(nn.Module):
         attention_bias_rank: int = 16,
         # 时序池化
         use_attention_pooling: bool = True,
+        # 前后辅助任务
+        use_front_back_auxiliary: bool = False,
     ):
         super().__init__()
         if encoder_channels is None:
@@ -155,6 +157,7 @@ class BinauralDOANet(nn.Module):
             dropout=dropout,
             use_regression=use_regression,
             use_attention_pooling=use_attention_pooling,
+            use_front_back_auxiliary=use_front_back_auxiliary,
         )
 
     def _build_attention_bias(self, d_feat: torch.Tensor) -> tuple:
@@ -287,6 +290,7 @@ def build_model(cfg) -> BinauralDOANet:
     use_attention_bias = getattr(m, 'use_attention_bias', True)
     attention_bias_rank = getattr(m, 'attention_bias_rank', 16)
     use_attention_pooling = getattr(m, 'use_attention_pooling', True)
+    use_front_back_auxiliary = getattr(m, 'use_front_back_auxiliary', False)
 
     return BinauralDOANet(
         freq_bins=freq_bins,
@@ -311,4 +315,5 @@ def build_model(cfg) -> BinauralDOANet:
         use_attention_bias=use_attention_bias,
         attention_bias_rank=attention_bias_rank,
         use_attention_pooling=use_attention_pooling,
+        use_front_back_auxiliary=use_front_back_auxiliary,
     )

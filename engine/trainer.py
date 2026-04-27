@@ -67,12 +67,18 @@ class Trainer:
             anti_confusion_weight = getattr(t, 'anti_confusion_weight', 0.0)
             circular_soft_label_weight = getattr(t, 'circular_soft_label_weight', 0.0)
             circular_kappa = getattr(t, 'circular_kappa', 4.0)
+            front_back_aux_weight = getattr(t, 'front_back_aux_weight', 0.0)
+            front_back_focus_weight = getattr(t, 'front_back_focus_weight', 0.0)
+            front_back_focus_window_deg = getattr(t, 'front_back_focus_window_deg', 20.0)
             self.criterion = DOALoss(
                 num_classes=m.num_classes,
                 label_smoothing=t.label_smoothing,
                 anti_confusion_weight=anti_confusion_weight,
                 circular_soft_label_weight=circular_soft_label_weight,
                 circular_kappa=circular_kappa,
+                front_back_aux_weight=front_back_aux_weight,
+                front_back_focus_weight=front_back_focus_weight,
+                front_back_focus_window_deg=front_back_focus_window_deg,
             )
             msg = "使用分类loss"
             if anti_confusion_weight > 0:
@@ -81,6 +87,13 @@ class Trainer:
                 msg += (
                     f" + circular_soft_label(weight={circular_soft_label_weight},"
                     f" kappa={circular_kappa})"
+                )
+            if front_back_aux_weight > 0:
+                msg += f" + front/back辅助头(weight={front_back_aux_weight})"
+            if front_back_focus_weight > 0:
+                msg += (
+                    f" + 前后轴样本加权(weight={front_back_focus_weight},"
+                    f" window={front_back_focus_window_deg}deg)"
                 )
             self.logger.info(msg)
 
@@ -259,7 +272,14 @@ class Trainer:
                     loss = loss_dict['total']
                 else:
                     # 纯分类loss
-                    loss = self.criterion(out["logits"], labels)
+                    loss_dict = self.criterion(
+                        out["logits"],
+                        labels,
+                        front_back_logits=out.get("front_back_logits"),
+                        front_back_targets=batch.get("front_back_label"),
+                        front_back_focus_distance_deg=batch.get("front_back_focus_distance_deg"),
+                    )
+                    loss = loss_dict["total"]
 
             # 防止数值发散传播到参数：非有限loss直接跳过该batch
             if not torch.isfinite(loss):
@@ -300,10 +320,16 @@ class Trainer:
                     self.tb_writer.add_scalar("train/step_loss_cls", loss_dict['classification'], self.global_step)
                     self.tb_writer.add_scalar("train/step_loss_reg", loss_dict['regression'], self.global_step)
                 else:
+                    extra = ""
+                    if loss_dict.get("front_back") is not None:
+                        extra = f" (cls={loss_dict['classification']:.4f}, fb={loss_dict['front_back']:.4f})"
                     self.logger.info(
                         f"  [Epoch {epoch}][{batch_idx}/{len(self.train_loader)}] "
-                        f"loss={loss.item():.4f}"
+                        f"loss={loss.item():.4f}{extra}"
                     )
+                    self.tb_writer.add_scalar("train/step_loss_cls", loss_dict["classification"], self.global_step)
+                    if loss_dict.get("front_back") is not None:
+                        self.tb_writer.add_scalar("train/step_loss_fb", loss_dict["front_back"], self.global_step)
                 self.tb_writer.add_scalar("train/step_loss", loss.item(), self.global_step)
 
         return total_loss / max(num_batches, 1)

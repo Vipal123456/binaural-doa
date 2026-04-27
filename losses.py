@@ -29,20 +29,34 @@ class DOALoss(nn.Module):
         anti_confusion_weight: float = 0.0,
         circular_soft_label_weight: float = 0.0,
         circular_kappa: float = 4.0,
+        front_back_aux_weight: float = 0.0,
+        front_back_focus_weight: float = 0.0,
+        front_back_focus_window_deg: float = 20.0,
     ):
         super().__init__()
         self.ce = nn.CrossEntropyLoss(label_smoothing=label_smoothing, reduction='none')
+        self.front_back_ce = nn.CrossEntropyLoss(reduction='none')
         self.num_classes = num_classes
         self.anti_confusion_weight = anti_confusion_weight
         self.circular_soft_label_weight = float(circular_soft_label_weight)
         self.circular_kappa = float(circular_kappa)
+        self.front_back_aux_weight = float(front_back_aux_weight)
+        self.front_back_focus_weight = float(front_back_focus_weight)
+        self.front_back_focus_window_deg = float(front_back_focus_window_deg)
 
         # 预计算每个bin的中心角（弧度）用于构造圆周软标签。
         centers_deg = -180.0 + (torch.arange(num_classes).float() + 0.5) * (360.0 / num_classes)
         centers_rad = torch.deg2rad(centers_deg)
         self.register_buffer("bin_centers_rad", centers_rad, persistent=False)
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        front_back_logits: torch.Tensor = None,
+        front_back_targets: torch.Tensor = None,
+        front_back_focus_distance_deg: torch.Tensor = None,
+    ) -> dict:
         """
         参数:
             logits:  ``[B, num_classes]``
@@ -86,7 +100,31 @@ class DOALoss(nn.Module):
             circular_loss = -(soft_targets * log_probs).sum(dim=-1)       # [B]
             total_loss = total_loss + self.circular_soft_label_weight * circular_loss
 
-        return total_loss.mean()
+        sample_weights = None
+        if self.front_back_focus_weight > 0 and front_back_focus_distance_deg is not None:
+            within_window = front_back_focus_distance_deg <= self.front_back_focus_window_deg
+            sample_weights = 1.0 + within_window.float() * self.front_back_focus_weight
+            total_loss = total_loss * sample_weights
+
+        front_back_loss_value = None
+        if (
+            self.front_back_aux_weight > 0
+            and front_back_logits is not None
+            and front_back_targets is not None
+        ):
+            fb_loss = self.front_back_ce(front_back_logits, front_back_targets)
+            if sample_weights is not None:
+                fb_loss = fb_loss * sample_weights
+            front_back_loss_value = fb_loss.mean()
+            total_loss = total_loss.mean() + self.front_back_aux_weight * front_back_loss_value
+        else:
+            total_loss = total_loss.mean()
+
+        return {
+            "total": total_loss,
+            "classification": ce_loss.mean().item(),
+            "front_back": None if front_back_loss_value is None else front_back_loss_value.item(),
+        }
 
 
 class MultiTaskDOALoss(nn.Module):

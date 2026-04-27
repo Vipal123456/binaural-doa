@@ -29,6 +29,7 @@
    - 新增 `train_root / val_root / test_root` 显式 split-root 加载方式
    - v5 baseline 在 unseen-subject test 上达到：`MAE=15.90°`，`median=2.50°`，`error<10°=82.66%`
    - **enhanced binaural features** 版本在 unseen-subject test 上进一步达到：`MAE=13.77°`，`median=2.50°`，`error<10°=85.28%`
+   - **front/back auxiliary only** 版本当前达到最佳 unseen-subject test：`MAE=11.97°`，`median=2.50°`，`error<10°=86.93%`
 
 ## 新增主线：robust50h 多 subject / unseen-subject 泛化
 
@@ -114,7 +115,7 @@ enhanced binaural features（`configs/train_librispeech_multisubject_robust50h_v
 
 - `enhanced` 在验证集上没有超过 v5 baseline（`10.65°` vs `10.49°`）
 - 但在 unseen-subject test 上显著更好，尤其体现在 MAE 和长尾误差改善
-- 当前 robust50h 主线推荐 checkpoint 已更新为 enhanced 版本
+- 当前 robust50h 主线推荐 checkpoint 已进一步更新为 `fbaux_only` 版本
 
 ### 当前误差画像
 
@@ -158,52 +159,66 @@ enhanced binaural features（`configs/train_librispeech_multisubject_robust50h_v
 | 版本 | 配置 | Accuracy | Top-3 | MAE | Median | error<5° | error<10° | 说明 |
 |------|------|----------|-------|-----|--------|----------|-----------|------|
 | v5 baseline | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml` | 0.6198 | 0.9028 | 15.90° | 2.50° | 71.20% | 82.66% | 原 robust50h 主线 |
-| **v5 + enhanced features** | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml` | **0.6432** | 0.8970 | **13.77°** | 2.50° | **72.73%** | **85.28%** | 当前推荐 best |
+| v5 + enhanced features | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml` | 0.6432 | 0.8970 | 13.77° | 2.50° | 72.73% | 85.28% | enhanced 输入特征 |
+| v5 + enhanced + fbaux + focus | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux.yaml` | 0.6497 | **0.9277** | 14.52° | 2.50° | 73.28% | 84.58% | 粗前后判别更强，但 MAE 退化 |
+| v5 + enhanced + fbfocus only | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbfocus_only.yaml` | 0.6446 | 0.9008 | 13.45° | 2.50° | 73.81% | 84.76% | 单独前后轴加权，收益有限 |
+| **v5 + enhanced + fbaux only** | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml` | **0.6489** | 0.8832 | **11.97°** | 2.50° | **74.21%** | **86.93%** | **当前推荐 best** |
 
-enhanced 相对 baseline 的变化：
+当前主结论：
 
-- Accuracy: `+2.34%`
-- MAE: `-2.13°`
-- Error < 5°: `+1.53%`
-- Error < 10°: `+2.62%`
-- Top-3 Accuracy: `-0.58%`
+- `fbaux_only` 是当前最优版本，test MAE 从 `13.77°` 进一步降到 `11.97°`
+- `fbfocus_only` 单独也有一定收益，但明显弱于 `fbaux_only`
+- `fbaux + focus` 组合并没有叠加增益，反而会伤害最终 MAE
+- 这说明主要收益来自 `front/back auxiliary head`，而不是前后轴样本加权
 
-解释：
+推荐顺序：
 
-- enhanced 并没有提升 Top-3 宽容排序指标
-- 但它显著降低了最终角度误差，尤其减少了长尾大错
-- 这说明增强双耳特征更有利于 unseen-subject HRTF 泛化
+1. `fbaux_only`
+2. `enhanced`
+3. `fbfocus_only`
+4. `fbaux + focus`
 
 ## 模型架构
 
-### 基础流程（v1-v4通用）
+### 当前主线流程（fbaux_only）
 
 ```
 立体声 WAV
     │
     ▼
 STFT 特征提取
-(log_mag_L, log_mag_R, IPD, ILD)
+(log_mag_L, log_mag_R, IPD, ILD,
+ ipd_sin, ipd_cos, coherence)
     │
     ▼
 共享编码器（左右耳）
     │
     ▼
-差异先验 + 双向交叉注意力 + 门控
+IPD / ILD 投影
     │
     ▼
-特征融合
+差异先验 d_feat
+    │
+    ├────────► 双向交叉注意力 + attention bias
+    │                 │
+    │                 ▼
+    │            独立残差门控
+    │                 │
+    ▼                 ▼
+         融合特征序列
+              │
+              ▼
+      BiGRU + attention pooling
+         ├────────► 72类 DOA 分类头
+         └────────► front/back 辅助头
     │
     ▼
-BiGRU + 分类头
-    │
-    ▼
-72 类方位角分类（[-180, 180)）
+最终输出：72 类方位角分类（主任务）
 ```
 
-### v5 架构创新
+### 当前主线的关键改动
 
-v5 在上述基础上引入的核心改进：
+在 v5 主干基础上，当前推荐主线 `fbaux_only` 叠加了两类关键设计：
 
 1. **Attention Bias 注入（双向低秩）**
    - 从 d_feat 生成 rank=16 的双向 LR/RL attention bias
@@ -225,6 +240,15 @@ v5 在上述基础上引入的核心改进：
    - 利用 von Mises 分布编码角度的周期性约束
    - 减少类边界跳跃问题，提升梯度稳定性
 
+5. **增强双耳输入特征（enhanced binaural features）**
+   - 在 `IPD / ILD` 之外额外使用 `sin(IPD) / cos(IPD) / coherence`
+   - 提升对 unseen-subject HRTF 的泛化表现
+
+6. **front/back 辅助头（当前主收益项）**
+   - 在时序池化后的共享表示上新增 `front/back` 二分类头
+   - 主任务仍是 72 类 DOA 分类，辅助任务只用于训练阶段约束
+   - 当前实验表明：该辅助头显著降低了最终 MAE，并减少了长尾大错
+
 主要模块：
 
 - `dataset/feature_extractor.py`: 双耳频域特征提取
@@ -232,9 +256,9 @@ v5 在上述基础上引入的核心改进：
 - `models/difference_prior.py`: 差异先验
 - `models/cross_attention.py`: 双向交叉注意力 + attention bias
 - `models/gating.py`: 独立残差门控（v5 升级）
-- `models/temporal_head.py`: BiGRU + attention pooling（v5 升级）
+- `models/temporal_head.py`: BiGRU + attention pooling + front/back auxiliary head
 - `models/binaural_doa_net.py`: 整体模型组装（集成所有创新）
-- `losses.py`: 分类 + 圆形软标签多任务损失 (v5)
+- `losses.py`: 分类 + 圆形软标签 + 可选 front/back 辅助损失
 
 ## 模型复杂度
 
@@ -494,6 +518,37 @@ SMOKE_EPOCHS=5 bash run_cipic_reverb_demand50h_ablation_pipeline.sh a7 smoke 42,
 - 50h robust multisubject（subject-disjoint, unseen-subject）
   - `data/librispeech_cipic_multisubject_robust50h_v1`
 
+### 当前主线配置说明
+
+当前 robust50h unseen-subject 主线相关配置分为 4 条：
+
+- baseline：
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml`
+- enhanced：
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml`
+- front/back 组合版：
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux.yaml`
+- 当前推荐主线 `fbaux_only`：
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml`
+- 对照消融 `fbfocus_only`：
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbfocus_only.yaml`
+
+相对 `enhanced`，`fbaux_only` 的配置改动是：
+
+- `model.use_front_back_auxiliary: true`
+- `train.front_back_aux_weight: 0.3`
+- `train.front_back_focus_weight: 0.0`
+
+也就是说，当前主线保留了：
+
+- enhanced binaural features
+- v5 attention bias / 独立残差门控 / attention pooling / circular soft label
+- front/back auxiliary head
+
+同时去掉了：
+
+- front/back axis sample weighting
+
 ### 划分比例
 
 统一采用：
@@ -543,6 +598,12 @@ python train.py --config configs/train_librispeech_multisubject_robust50h_v5_bia
 python train.py --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml
 ```
 
+如果要运行当前推荐主线 `fbaux_only`：
+
+```bash
+python train.py --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml
+```
+
 从 best 恢复并继续训练：
 
 ```bash
@@ -586,10 +647,10 @@ bash run_cipic_reverb_demand50h_v5_pipeline.sh  # 待补充
 
 ## 当前推荐配置
 
-推荐使用 **v5（创新主干架构）**：
+推荐使用 **v5 + enhanced + fbaux_only（当前 unseen-subject 主线）**：
 
 - `configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml`
 
 核心配置特点：
 
@@ -599,6 +660,8 @@ model:
   attention_bias_rank: 16
   use_attention_pooling: true      # BiGRU 后 attention pooling
   use_gating: true                 # 双向独立残差门控
+  use_enhanced_binaural_features: true
+  use_front_back_auxiliary: true
   gru_hidden_size: 128
   
 train:
@@ -608,6 +671,8 @@ train:
   circular_soft_label_weight: 0.2  # 圆形软标签权重
   circular_kappa: 4.0              # von Mises 浓度参数
   anti_confusion_weight: 1.0       # 前后对向惩罚
+  front_back_aux_weight: 0.3       # front/back 辅助头权重
+  front_back_focus_weight: 0.0     # 当前主线不使用 axis weighting
   early_stopping_patience: 15      # 早停耐心度
 ```
 
@@ -640,7 +705,10 @@ DOA-net/
 │   ├── train_librispeech_subject003_cipic_reverb_demand50h_v4_enhanced_features.yaml
 │   ├── train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml
 │   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml
-│   └── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml  ★
+│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml
+│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux.yaml
+│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml  ★
+│   └── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbfocus_only.yaml
 ├── dataset/
 ├── engine/
 ├── models/
@@ -665,12 +733,12 @@ DOA-net/
 `outputs/checkpoints_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl/best.pth`
 
 当前推荐 best（robust50h unseen-subject 主线）：  
-`outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced/best.pth`
+`outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only/best.pth`
 
 **推荐配置：**
 
 - `configs/train_librispeech_subject003_cipic_reverb_demand50h_v5_bias_gating_attnpool_csl.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml`
 
 **关键指标：**
 

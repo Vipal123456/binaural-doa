@@ -43,10 +43,12 @@ class TemporalHead(nn.Module):
         dropout: float = 0.2,
         use_regression: bool = False,
         use_attention_pooling: bool = True,
+        use_front_back_auxiliary: bool = False,
     ):
         super().__init__()
         self.use_regression = use_regression
         self.use_attention_pooling = use_attention_pooling
+        self.use_front_back_auxiliary = use_front_back_auxiliary
 
         self.gru = nn.GRU(
             input_size=input_dim,
@@ -73,6 +75,10 @@ class TemporalHead(nn.Module):
 
         # 分类头：输出离散的方位角类别
         self.classifier = nn.Linear(gru_out_dim, num_classes)
+
+        # front/back 辅助头：显式学习前后判别
+        if self.use_front_back_auxiliary:
+            self.front_back_classifier = nn.Linear(gru_out_dim, 2)
 
         # 回归头：输出连续的方位角值（弧度，范围 [-π, π]）
         if use_regression:
@@ -109,6 +115,9 @@ class TemporalHead(nn.Module):
         logits = self.classifier(pooled)  # [B, num_classes]
 
         result = {"logits": logits}
+
+        if self.use_front_back_auxiliary:
+            result["front_back_logits"] = self.front_back_classifier(pooled)
 
         # 回归输出（如果启用）
         if self.use_regression:

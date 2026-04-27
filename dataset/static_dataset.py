@@ -268,6 +268,29 @@ class StaticDOADataset(Dataset):
         label = max(0, min(self.num_classes - 1, label))
         return label
 
+    @staticmethod
+    def _wrap_azimuth_deg(azimuth_deg: float) -> float:
+        """将角度规范化到 [-180, 180) 区间。"""
+        wrapped = ((float(azimuth_deg) + 180.0) % 360.0) - 180.0
+        return wrapped
+
+    def _azimuth_to_front_back_label(self, azimuth_deg: float) -> int:
+        """将方位角映射为前/后标签。
+
+        定义：
+        - ``front = 0``: [-90°, 90°]
+        - ``back = 1``: 其余区间
+        """
+        wrapped = self._wrap_azimuth_deg(azimuth_deg)
+        return 0 if abs(wrapped) <= 90.0 else 1
+
+    def _compute_front_back_focus_distance_deg(self, azimuth_deg: float) -> float:
+        """计算样本到前后轴（0° / 180°）的最小圆周距离。"""
+        wrapped = self._wrap_azimuth_deg(azimuth_deg)
+        dist_to_front = abs(wrapped)
+        dist_to_back = abs(abs(wrapped) - 180.0)
+        return min(dist_to_front, dist_to_back)
+
     def __len__(self) -> int:
         return len(self.segments)
 
@@ -307,6 +330,8 @@ class StaticDOADataset(Dataset):
             "coherence": feats["coherence"],   # [T, F]
             "azimuth_label": seg["azimuth_label"],
             "azimuth_deg": seg["azimuth_deg"],
+            "front_back_label": self._azimuth_to_front_back_label(seg["azimuth_deg"]),
+            "front_back_focus_distance_deg": self._compute_front_back_focus_distance_deg(seg["azimuth_deg"]),
         }
 
     @staticmethod

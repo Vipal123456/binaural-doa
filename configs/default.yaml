@@ -67,6 +67,7 @@ model:
 
   # 通用设置
   dropout: 0.2
+  use_front_back_auxiliary: false
 
 train:
   batch_size: 32
@@ -93,6 +94,14 @@ train:
 
   # 梯度裁剪（0 = 禁用）
   grad_clip: 5.0
+
+  # 可选：前后消歧相关训练项
+  anti_confusion_weight: 0.0
+  circular_soft_label_weight: 0.0
+  circular_kappa: 4.0
+  front_back_aux_weight: 0.0
+  front_back_focus_weight: 0.0
+  front_back_focus_window_deg: 20.0
 
   # 日志记录间隔（批次数）
   log_interval: 20
