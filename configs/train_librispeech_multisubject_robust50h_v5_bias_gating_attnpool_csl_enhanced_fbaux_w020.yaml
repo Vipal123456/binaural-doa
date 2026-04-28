@@ -1,0 +1,79 @@
+# ==============================================================================
+# fbaux_only aux-weight sweep: front_back_aux_weight = 0.20
+# 固定主干：v5 + enhanced binaural features + fbaux_only
+# ==============================================================================
+
+dataset:
+  root_dir: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/train_subjects"
+  train_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/train_subjects"
+  val_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/val_subjects"
+  test_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/test_subjects_unseen"
+  sample_rate: 16000
+  segment_seconds: 2.0
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  split_seed: 42
+  dataset_type: "static"
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: "hann"
+
+model:
+  encoder_channels: [32, 64, 128]
+  encoder_out_dim: 128
+  proj_dim: 128
+  prior_hidden_dim: 256
+  prior_out_dim: 128
+  attention_dim: 128
+  num_heads: 4
+  gate_dim: 128
+  use_gating: true
+  use_independent_gating: true
+  use_residual_gating: true
+  use_attention_bias: true
+  attention_bias_rank: 16
+  use_attention_pooling: true
+  use_enhanced_binaural_features: true
+  use_front_back_auxiliary: true
+  gru_hidden_size: 128
+  gru_num_layers: 2
+  gru_dropout: 0.1
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.2
+  use_regression: false
+
+train:
+  batch_size: 64
+  num_workers: 4
+  epochs: 100
+  lr: 0.0005
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+
+  scheduler: "cosine"
+  cosine_T_max: 100
+  cosine_eta_min: 0.00001
+
+  amp: false
+  device: "cuda"
+  grad_clip: 1.0
+
+  anti_confusion_weight: 1.0
+  circular_soft_label_weight: 0.2
+  circular_kappa: 4.0
+  front_back_aux_weight: 0.20
+  front_back_focus_weight: 0.0
+  front_back_focus_window_deg: 20.0
+
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+
+output:
+  save_dir: "outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w020"
+  log_dir: "outputs/logs_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w020"

@@ -171,6 +171,23 @@ enhanced binaural features（`configs/train_librispeech_multisubject_robust50h_v
 - `fbaux + focus` 组合并没有叠加增益，反而会伤害最终 MAE
 - 这说明主要收益来自 `front/back auxiliary head`，而不是前后轴样本加权
 
+### fbaux_only 辅助权重 sweep（已完成）
+
+在 `fbaux_only` 主线上，进一步对 `front_back_aux_weight` 做了单变量 sweep：
+
+| aux weight | 配置 | best val MAE | test Accuracy | test Top-3 | test MAE | test std | error<5° | error<10° | 结论 |
+|------------|------|--------------|---------------|------------|----------|----------|----------|-----------|------|
+| `0.10` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w010.yaml` | 10.28° | **0.6563** | 0.8979 | 12.84° | 32.84 | 73.14% | 85.80% | 精度较高，但 MAE 不如 0.30 |
+| `0.15` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w015.yaml` | 9.50° | 0.6187 | 0.9009 | 14.97° | 35.73 | 69.30% | 82.87% | 验证集最优，但 unseen-subject 泛化最差 |
+| `0.20` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w020.yaml` | 10.27° | 0.6487 | **0.9229** | 13.71° | 35.11 | **74.94%** | 86.10% | Top-3 更高，但 MAE 仍弱于 0.30 |
+| **`0.30`** | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml` | **9.09°** | 0.6489 | 0.8832 | **11.97°** | **31.51** | 74.21% | **86.93%** | **当前最终推荐设置** |
+
+这轮 sweep 的结论是：
+
+- `front_back_aux_weight=0.30` 仍然是当前最优测试配置
+- 较小权重更容易提升 `accuracy` 或 `top-3`，但没有稳定降低最终 `MAE`
+- `0.15` 说明当前 val split 和 unseen-subject test 的偏好并不完全一致，论文里应优先报告 test 泛化结论
+
 推荐顺序：
 
 1. `fbaux_only`
@@ -520,7 +537,7 @@ SMOKE_EPOCHS=5 bash run_cipic_reverb_demand50h_ablation_pipeline.sh a7 smoke 42,
 
 ### 当前主线配置说明
 
-当前 robust50h unseen-subject 主线相关配置分为 4 条：
+当前 robust50h unseen-subject 主线相关配置分为 5 条主线/消融配置，以及 3 条 `fbaux_only` 权重 sweep 配置：
 
 - baseline：
   - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml`
@@ -532,6 +549,10 @@ SMOKE_EPOCHS=5 bash run_cipic_reverb_demand50h_ablation_pipeline.sh a7 smoke 42,
   - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml`
 - 对照消融 `fbfocus_only`：
   - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbfocus_only.yaml`
+- `fbaux_only` 权重 sweep：
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w010.yaml`
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w015.yaml`
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w020.yaml`
 
 相对 `enhanced`，`fbaux_only` 的配置改动是：
 
@@ -708,7 +729,10 @@ DOA-net/
 │   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml
 │   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux.yaml
 │   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml  ★
-│   └── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbfocus_only.yaml
+│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbfocus_only.yaml
+│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w010.yaml
+│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w015.yaml
+│   └── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_w020.yaml
 ├── dataset/
 ├── engine/
 ├── models/
