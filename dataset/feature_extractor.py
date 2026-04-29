@@ -49,6 +49,7 @@ class FeatureExtractor:
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.win_length = win_length
+        self.coherence_kernel = (5, 3)  # (freq, time) local smoothing window
 
         if window == "hann":
             self.window = torch.hann_window(win_length)
@@ -106,8 +107,9 @@ class FeatureExtractor:
         ild = 20.0 * torch.log10((mag_L + eps) / (mag_R + eps))  # [F, T]
         ild = ild.transpose(0, 1)  # [T, F]
 
-        # 双耳相干性: |E[LR*]| / sqrt(E[|L|^2]E[|R|^2]) 的瞬时近似
-        coherence = (cross.abs() / (mag_L * mag_R + eps)).transpose(0, 1)  # [T, F]
+        # 双耳相干性: |E[LR*]| / sqrt(E[|L|^2]E[|R|^2])
+        # 对互谱与功率谱做局部时频平滑，否则瞬时形式会退化为近似常数 1。
+        coherence = self._compute_coherence(cross, mag_L, mag_R, eps).transpose(0, 1)  # [T, F]
         coherence = coherence.clamp_(0.0, 1.0)
 
         return {
@@ -152,3 +154,38 @@ class FeatureExtractor:
             return_complex=True,
         )  # [F, T]
         return spec
+
+    def _compute_coherence(
+        self,
+        cross: torch.Tensor,
+        mag_L: torch.Tensor,
+        mag_R: torch.Tensor,
+        eps: float,
+    ) -> torch.Tensor:
+        """估计局部时频双耳相干性。
+
+        参数:
+            cross: ``spec_L * conj(spec_R)``，形状 ``[F, T]``。
+            mag_L: 左耳幅度谱，形状 ``[F, T]``。
+            mag_R: 右耳幅度谱，形状 ``[F, T]``。
+
+        返回:
+            coherence: 形状 ``[F, T]``。
+        """
+        kf, kt = self.coherence_kernel
+        pad = (kt // 2, kt // 2, kf // 2, kf // 2)
+
+        def smooth(x: torch.Tensor) -> torch.Tensor:
+            x = x.unsqueeze(0).unsqueeze(0)  # [1, 1, F, T]
+            x = F.pad(x, pad, mode="reflect")
+            x = F.avg_pool2d(x, kernel_size=(kf, kt), stride=1)
+            return x.squeeze(0).squeeze(0)
+
+        cross_real = smooth(cross.real)
+        cross_imag = smooth(cross.imag)
+        cross_mag = torch.sqrt(cross_real.square() + cross_imag.square() + eps)
+
+        pxx = smooth(mag_L.square())
+        pyy = smooth(mag_R.square())
+        denom = torch.sqrt(pxx * pyy + eps)
+        return cross_mag / (denom + eps)

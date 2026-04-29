@@ -8,7 +8,6 @@
 
 import argparse
 import json
-import sys
 
 import numpy as np
 import torch
@@ -49,6 +48,17 @@ def load_audio(wav_path: str, target_sr: int) -> np.ndarray:
         raise RuntimeError("请安装 soundfile 或 librosa 以加载音频文件。")
 
     return data[:2].astype(np.float32)
+
+
+def circular_mean_deg(angles_deg) -> float:
+    """计算角度列表的圆周平均值（单位：度）。"""
+    angles = np.asarray(angles_deg, dtype=np.float64)
+    if angles.size == 0:
+        return 0.0
+    angles_rad = np.deg2rad(angles)
+    sin_mean = np.mean(np.sin(angles_rad))
+    cos_mean = np.mean(np.cos(angles_rad))
+    return float(np.rad2deg(np.arctan2(sin_mean, cos_mean)))
 
 
 def main():
@@ -136,7 +146,7 @@ def main():
               f"(分箱 {pred_bin}, 置信度 {probs[pred_bin]:.3f})")
 
     # ---- 平均预测 ----
-    avg_angle = np.mean([r["predicted_azimuth_deg"] for r in results])
+    avg_angle = circular_mean_deg([r["predicted_azimuth_deg"] for r in results])
     print(f"\n平均预测方位角: {avg_angle:+.1f}°")
 
     # ---- 保存 JSON ----

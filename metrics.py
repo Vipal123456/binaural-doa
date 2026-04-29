@@ -1,16 +1,9 @@
-"""DOA 分类的评估指标。
-
-指标:
-  1. 分类准确率
-  2. Top-k 准确率
-    3. 平均角度误差（MAE，单位为度，考虑圆周特性）
-    4. 宏平均精确率 / 召回率 / F1（Macro Precision/Recall/F1）
-"""
+"""DOA 分类的评估指标。"""
 
 import numpy as np
 from typing import Dict, Optional, Tuple
 
-from utils.angle import bins_to_angles, angular_error
+from utils.angle import bins_to_angles, angular_error, wrap_angles
 
 
 class DOAMetrics:
@@ -44,6 +37,33 @@ class DOAMetrics:
         self._true_degs = []
         self._pred_degs = []  # 回归预测的连续角度
         self._logits = []
+
+    @staticmethod
+    def _front_back_labels(angles_deg: np.ndarray) -> np.ndarray:
+        """前后半平面标签。
+
+        约定:
+        - front = 0: [-90°, 90°]
+        - back = 1:  其余区间
+        """
+        wrapped = wrap_angles(np.asarray(angles_deg, dtype=np.float64))
+        return (np.abs(wrapped) > 90.0).astype(np.int64)
+
+    @staticmethod
+    def _region_labels(angles_deg: np.ndarray) -> np.ndarray:
+        """将角度划分为 front / side / back 三个区域。
+
+        为了让 front/back/side MAE 形成互斥分区，这里使用:
+        - front: |angle| <= 60°
+        - side:  60° < |angle| < 120°
+        - back:  |angle| >= 120°
+        """
+        wrapped = wrap_angles(np.asarray(angles_deg, dtype=np.float64))
+        abs_angles = np.abs(wrapped)
+        regions = np.full(abs_angles.shape, "side", dtype=object)
+        regions[abs_angles <= 60.0] = "front"
+        regions[abs_angles >= 120.0] = "back"
+        return regions
 
     def update(
         self,
@@ -177,6 +197,35 @@ class DOAMetrics:
         results["error_lt_10"] = float((ang_err < 10).sum()) / max(N, 1)
         results["error_lt_20"] = float((ang_err < 20).sum()) / max(N, 1)
         results["error_lt_30"] = float((ang_err < 30).sum()) / max(N, 1)
+
+        # --- 4.1 诊断性错误统计 ---
+        pred_fb = self._front_back_labels(pred_degs)
+        true_fb = self._front_back_labels(true_degs)
+        results["front_back_error_rate"] = float((pred_fb != true_fb).sum()) / max(N, 1)
+
+        circular_bin_diff = np.abs(pred_bins - true_bins)
+        circular_bin_diff = np.minimum(circular_bin_diff, self.num_classes - circular_bin_diff)
+        half_bins = self.num_classes // 2
+
+        # near-bin: 落在真实bin及其相邻bin内（圆周意义下）
+        results["near_bin_error_rate"] = float((circular_bin_diff <= 1).sum()) / max(N, 1)
+
+        # opposite: 典型180°翻转，允许 ±1 bin 容差
+        results["opposite_error_rate"] = float(
+            (np.abs(circular_bin_diff - half_bins) <= 1).sum()
+        ) / max(N, 1)
+
+        # large error: 明显大错，默认定义为角误差 >= 45°
+        results["large_error_rate"] = float((ang_err >= 45.0).sum()) / max(N, 1)
+
+        # --- 4.2 按空间区域统计 MAE ---
+        region_labels = self._region_labels(true_degs)
+        for region_name in ("front", "back", "side"):
+            mask = region_labels == region_name
+            if mask.any():
+                results[f"{region_name}_mae"] = float(ang_err[mask].mean())
+            else:
+                results[f"{region_name}_mae"] = float("nan")
 
         # --- 5. 混合预测统计 ---
         if len(self._pred_degs) > 0:
