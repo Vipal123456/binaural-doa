@@ -29,6 +29,7 @@ from models.difference_prior import IPDILDProjection, DifferencePrior
 from models.cross_attention import BidirectionalCrossAttention
 from models.gating import GatingModule
 from models.temporal_head import TemporalHead
+from models.sdel_crnn_baseline import SDELCRNNBaseline
 
 
 class BinauralDOANet(nn.Module):
@@ -267,7 +268,7 @@ class BinauralDOANet(nn.Module):
         return outputs
 
 
-def build_model(cfg) -> BinauralDOANet:
+def build_model(cfg):
     """根据配置对象构建 :class:`BinauralDOANet`。
 
     参数:
@@ -280,6 +281,25 @@ def build_model(cfg) -> BinauralDOANet:
     f = cfg.feature
 
     freq_bins = f.n_fft // 2 + 1
+    model_type = getattr(m, "type", "binaural_doa_net")
+
+    if model_type in {"sdel_doa_reg", "sdel_doa_cls"}:
+        return SDELCRNNBaseline(
+            freq_bins=freq_bins,
+            cnn_channels=getattr(m, "sdel_cnn_channels", [32, 64, 128]),
+            f_pool_size=getattr(m, "sdel_f_pool_size", [4, 4, 4]),
+            t_pool_size=getattr(m, "sdel_t_pool_size", [1, 1, 1]),
+            kernel_size=tuple(getattr(m, "sdel_kernel_size", [3, 3])),
+            dropout=m.dropout,
+            gru_hidden_size=m.gru_hidden_size,
+            gru_num_layers=m.gru_num_layers,
+            fnn_size=getattr(m, "sdel_fnn_size", 128),
+            num_fnn_layers=getattr(m, "sdel_num_fnn_layers", 2),
+            num_classes=m.num_classes,
+            azimuth_range=tuple(m.azimuth_range),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+            output_mode="reg" if model_type == "sdel_doa_reg" else "cls",
+        )
 
     # 检查是否启用回归
     use_regression = getattr(m, 'use_regression', False)

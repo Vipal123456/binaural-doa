@@ -10,7 +10,7 @@ import torch.nn as nn
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
-from losses import DOALoss, MultiTaskDOALoss
+from losses import DOALoss, MultiTaskDOALoss, DOAVectorRegressionLoss
 from metrics import DOAMetrics
 from utils.checkpoint import save_checkpoint, load_checkpoint
 from utils.logger import TBWriter
@@ -44,6 +44,7 @@ class Trainer:
 
         t = cfg.train
         m = cfg.model
+        self.model_type = getattr(m, "type", "binaural_doa_net")
 
         # 设备
         self.device = torch.device(t.device if torch.cuda.is_available() else "cpu")
@@ -52,16 +53,34 @@ class Trainer:
         # 损失函数
         # 检查是否使用多任务loss（分类+回归）
         self.use_regression = getattr(m, 'use_regression', False)
-        if self.use_regression:
+        self.use_vector_regression = self.model_type == "sdel_doa_reg"
+        if self.use_vector_regression:
+            front_back_aux_weight = getattr(t, 'front_back_aux_weight', 0.0)
+            self.criterion = DOAVectorRegressionLoss(
+                front_back_aux_weight=front_back_aux_weight,
+            )
+            msg = "使用 SDEL 向量回归loss"
+            if front_back_aux_weight > 0:
+                msg += f" + front/back辅助头(weight={front_back_aux_weight})"
+            self.logger.info(msg)
+        elif self.use_regression:
             regression_weight = getattr(t, 'regression_weight', 0.5)
             use_angular_loss = getattr(t, 'use_angular_loss', True)
+            anti_confusion_weight = getattr(t, 'anti_confusion_weight', 0.0)
+            front_back_aux_weight = getattr(t, 'front_back_aux_weight', 0.0)
             self.criterion = MultiTaskDOALoss(
                 num_classes=m.num_classes,
                 label_smoothing=t.label_smoothing,
                 regression_weight=regression_weight,
                 use_angular_loss=use_angular_loss,
+                anti_confusion_weight=anti_confusion_weight,
+                front_back_aux_weight=front_back_aux_weight,
             )
-            self.logger.info(f"使用多任务loss (分类+回归): regression_weight={regression_weight}, angular_loss={use_angular_loss}")
+            self.logger.info(
+                f"使用多任务loss (分类+回归): regression_weight={regression_weight}, "
+                f"angular_loss={use_angular_loss}, anti_confusion={anti_confusion_weight}, "
+                f"fbaux={front_back_aux_weight}"
+            )
         else:
             # 获取前后消歧权重
             anti_confusion_weight = getattr(t, 'anti_confusion_weight', 0.0)
@@ -259,7 +278,22 @@ class Trainer:
             with autocast(device_type=self.device.type, enabled=self.use_amp):
                 out = self.model(batch)
 
-                if self.use_regression:
+                if self.use_vector_regression:
+                    pred_vec = out["angle_vec"]
+                    true_angle_deg = batch["azimuth_deg"].float()
+                    true_angle_rad = torch.deg2rad(true_angle_deg)
+                    target_vec = torch.stack(
+                        [torch.sin(true_angle_rad), torch.cos(true_angle_rad)],
+                        dim=-1,
+                    ).float()
+                    loss_dict = self.criterion(
+                        pred_vec,
+                        target_vec,
+                        front_back_logits=out.get("front_back_logits"),
+                        front_back_targets=batch.get("front_back_label"),
+                    )
+                    loss = loss_dict["total"]
+                elif self.use_regression:
                     # 多任务loss：需要分类label和回归angle
                     pred_logits = out["logits"]
                     pred_angle = out["angle"]
@@ -268,7 +302,14 @@ class Trainer:
                     true_angle_deg = batch["azimuth_deg"]  # [B]
                     true_angle_rad = torch.deg2rad(true_angle_deg)  # [B], 转换为弧度
 
-                    loss_dict = self.criterion(pred_logits, pred_angle, labels, true_angle_rad)
+                    loss_dict = self.criterion(
+                        pred_logits,
+                        pred_angle,
+                        labels,
+                        true_angle_rad,
+                        front_back_logits=out.get("front_back_logits"),
+                        front_back_targets=batch.get("front_back_label"),
+                    )
                     loss = loss_dict['total']
                 else:
                     # 纯分类loss
@@ -311,14 +352,32 @@ class Trainer:
             self.global_step += 1
 
             if batch_idx % t.log_interval == 0:
-                if self.use_regression:
+                if self.use_vector_regression:
+                    extra = ""
+                    if loss_dict.get("front_back") is not None:
+                        extra = f" (vec={loss_dict['classification']:.4f}, fb={loss_dict['front_back']:.4f})"
+                    self.logger.info(
+                        f"  [Epoch {epoch}][{batch_idx}/{len(self.train_loader)}] "
+                        f"loss={loss.item():.4f}{extra}"
+                    )
+                    self.tb_writer.add_scalar("train/step_loss_vec", loss_dict["classification"], self.global_step)
+                    if loss_dict.get("front_back") is not None:
+                        self.tb_writer.add_scalar("train/step_loss_fb", loss_dict["front_back"], self.global_step)
+                elif self.use_regression:
                     # 多任务loss：显示分类和回归loss
                     self.logger.info(
                         f"  [Epoch {epoch}][{batch_idx}/{len(self.train_loader)}] "
-                        f"loss={loss.item():.4f} (cls={loss_dict['classification']:.4f}, reg={loss_dict['regression']:.4f})"
+                        f"loss={loss.item():.4f} "
+                        f"(cls={loss_dict['classification']:.4f}, reg={loss_dict['regression']:.4f}"
+                        + (
+                            f", fb={loss_dict['front_back']:.4f})"
+                            if loss_dict.get('front_back') is not None else ")"
+                        )
                     )
                     self.tb_writer.add_scalar("train/step_loss_cls", loss_dict['classification'], self.global_step)
                     self.tb_writer.add_scalar("train/step_loss_reg", loss_dict['regression'], self.global_step)
+                    if loss_dict.get('front_back') is not None:
+                        self.tb_writer.add_scalar("train/step_loss_fb", loss_dict['front_back'], self.global_step)
                 else:
                     extra = ""
                     if loss_dict.get("front_back") is not None:
@@ -364,7 +423,10 @@ class Trainer:
 
             # 提取回归预测（如果有）
             pred_degs = None
-            if "angle" in out:
+            if "angle_vec" in out:
+                pred_xy = out["angle_vec"].float().cpu()
+                pred_degs = torch.rad2deg(torch.atan2(pred_xy[:, 0], pred_xy[:, 1])).numpy()
+            elif "angle" in out:
                 # 从弧度转为度
                 pred_angle_rad = out["angle"].float().cpu()
                 pred_degs = torch.rad2deg(pred_angle_rad).numpy()

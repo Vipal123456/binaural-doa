@@ -1,0 +1,70 @@
+# ==============================================================================
+# SDEL-style CRNN baseline on robust50h unseen-subject protocol
+# Pure DOA classification baseline
+# ==============================================================================
+
+dataset:
+  root_dir: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/train_subjects"
+  train_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/train_subjects"
+  val_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/val_subjects"
+  test_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/test_subjects_unseen"
+  sample_rate: 16000
+  segment_seconds: 2.0
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  split_seed: 42
+  dataset_type: "static"
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: "hann"
+
+model:
+  type: "sdel_doa_cls"
+  sdel_cnn_channels: [32, 64, 128]
+  sdel_f_pool_size: [4, 4, 4]
+  sdel_t_pool_size: [1, 1, 1]
+  sdel_kernel_size: [3, 3]
+  sdel_fnn_size: 128
+  sdel_num_fnn_layers: 2
+  use_front_back_auxiliary: false
+  gru_hidden_size: 128
+  gru_num_layers: 2
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.2
+  use_regression: false
+
+train:
+  batch_size: 64
+  num_workers: 8
+  epochs: 100
+  lr: 0.0005
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+
+  scheduler: "cosine"
+  cosine_T_max: 100
+  cosine_eta_min: 0.00001
+
+  amp: false
+  device: "cuda"
+  grad_clip: 1.0
+
+  anti_confusion_weight: 0.0
+  circular_soft_label_weight: 0.0
+  circular_kappa: 4.0
+  front_back_aux_weight: 0.0
+  front_back_focus_weight: 0.0
+  front_back_focus_window_deg: 20.0
+
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+
+output:
+  save_dir: "outputs/checkpoints_multisubject_robust50h_sdel_doa_cls_baseline"
+  log_dir: "outputs/logs_multisubject_robust50h_sdel_doa_cls_baseline"

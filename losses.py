@@ -151,11 +151,17 @@ class MultiTaskDOALoss(nn.Module):
         label_smoothing: float = 0.0,
         regression_weight: float = 0.5,
         use_angular_loss: bool = True,
+        anti_confusion_weight: float = 0.0,
+        front_back_aux_weight: float = 0.0,
     ):
         super().__init__()
         self.classification_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         self.regression_weight = regression_weight
         self.use_angular_loss = use_angular_loss
+        self.num_classes = num_classes
+        self.anti_confusion_weight = float(anti_confusion_weight)
+        self.front_back_aux_weight = float(front_back_aux_weight)
+        self.front_back_ce = nn.CrossEntropyLoss(reduction="mean")
 
     def forward(
         self,
@@ -163,6 +169,8 @@ class MultiTaskDOALoss(nn.Module):
         pred_angle: torch.Tensor,
         target_label: torch.Tensor,
         target_angle: torch.Tensor,
+        front_back_logits: torch.Tensor = None,
+        front_back_targets: torch.Tensor = None,
     ) -> dict:
         """
         参数:
@@ -177,6 +185,15 @@ class MultiTaskDOALoss(nn.Module):
         # 1. 分类loss
         cls_loss = self.classification_loss(pred_logits, target_label)
 
+        if self.anti_confusion_weight > 0:
+            pred_bins = pred_logits.argmax(dim=-1)
+            bin_diff = torch.abs(pred_bins - target_label)
+            bin_diff = torch.minimum(bin_diff, self.num_classes - bin_diff)
+            half_bins = self.num_classes / 2
+            is_opposite = torch.abs(bin_diff - half_bins) < (self.num_classes * 0.15)
+            confusion_penalty = is_opposite.float() * self.anti_confusion_weight
+            cls_loss = cls_loss * (1.0 + confusion_penalty.mean())
+
         # 2. 回归loss
         if self.use_angular_loss:
             # 角度感知的损失：考虑圆周性质
@@ -190,9 +207,54 @@ class MultiTaskDOALoss(nn.Module):
 
         # 3. 总损失
         total_loss = cls_loss + self.regression_weight * reg_loss
+        fb_loss_value = None
+        if (
+            self.front_back_aux_weight > 0
+            and front_back_logits is not None
+            and front_back_targets is not None
+        ):
+            fb_loss = self.front_back_ce(front_back_logits, front_back_targets)
+            fb_loss_value = fb_loss
+            total_loss = total_loss + self.front_back_aux_weight * fb_loss
 
         return {
             'total': total_loss,
             'classification': cls_loss.item(),
             'regression': reg_loss.item(),
+            'front_back': None if fb_loss_value is None else fb_loss_value.item(),
+        }
+
+
+class DOAVectorRegressionLoss(nn.Module):
+    """二维单位向量回归损失，用于水平面 DOA baseline。"""
+
+    def __init__(self, front_back_aux_weight: float = 0.0):
+        super().__init__()
+        self.mse = nn.MSELoss()
+        self.front_back_aux_weight = float(front_back_aux_weight)
+        self.front_back_ce = nn.CrossEntropyLoss(reduction="mean")
+
+    def forward(
+        self,
+        pred_vec: torch.Tensor,
+        target_vec: torch.Tensor,
+        front_back_logits: torch.Tensor = None,
+        front_back_targets: torch.Tensor = None,
+    ) -> dict:
+        reg_loss = self.mse(pred_vec, target_vec)
+        total_loss = reg_loss
+        fb_loss_value = None
+        if (
+            self.front_back_aux_weight > 0
+            and front_back_logits is not None
+            and front_back_targets is not None
+        ):
+            fb_loss = self.front_back_ce(front_back_logits, front_back_targets)
+            fb_loss_value = fb_loss
+            total_loss = total_loss + self.front_back_aux_weight * fb_loss
+
+        return {
+            "total": total_loss,
+            "classification": reg_loss.item(),
+            "front_back": None if fb_loss_value is None else fb_loss_value.item(),
         }

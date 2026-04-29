@@ -77,7 +77,10 @@ class Evaluator:
 
             # 提取回归预测（如果有）
             pred_degs = None
-            if "angle" in out:
+            if "angle_vec" in out:
+                pred_xy = out["angle_vec"].float().cpu()
+                pred_degs = torch.rad2deg(torch.atan2(pred_xy[:, 0], pred_xy[:, 1])).numpy()
+            elif "angle" in out:
                 # 从弧度转为度
                 pred_angle_rad = out["angle"].float().cpu()
                 pred_degs = torch.rad2deg(pred_angle_rad).numpy()
