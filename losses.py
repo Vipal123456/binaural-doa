@@ -258,3 +258,41 @@ class DOAVectorRegressionLoss(nn.Module):
             "classification": reg_loss.item(),
             "front_back": None if fb_loss_value is None else fb_loss_value.item(),
         }
+
+
+class PureRegressionDOALoss(nn.Module):
+    """纯回归 DOA 损失：二维单位向量方向回归 + 可选 front/back 辅助。"""
+
+    def __init__(self, front_back_aux_weight: float = 0.0):
+        super().__init__()
+        self.front_back_aux_weight = float(front_back_aux_weight)
+        self.front_back_ce = nn.CrossEntropyLoss(reduction="mean")
+
+    def forward(
+        self,
+        pred_vec: torch.Tensor,
+        target_vec: torch.Tensor,
+        front_back_logits: torch.Tensor = None,
+        front_back_targets: torch.Tensor = None,
+    ) -> dict:
+        pred_vec = nn.functional.normalize(pred_vec, dim=-1)
+        target_vec = nn.functional.normalize(target_vec, dim=-1)
+        cos_sim = torch.sum(pred_vec * target_vec, dim=-1).clamp(-1.0, 1.0)
+        reg_loss = (1.0 - cos_sim).mean()
+
+        total_loss = reg_loss
+        fb_loss_value = None
+        if (
+            self.front_back_aux_weight > 0
+            and front_back_logits is not None
+            and front_back_targets is not None
+        ):
+            fb_loss = self.front_back_ce(front_back_logits, front_back_targets)
+            fb_loss_value = fb_loss
+            total_loss = total_loss + self.front_back_aux_weight * fb_loss
+
+        return {
+            "total": total_loss,
+            "regression": reg_loss.item(),
+            "front_back": None if fb_loss_value is None else fb_loss_value.item(),
+        }

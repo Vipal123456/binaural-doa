@@ -1,4 +1,4 @@
-"""时序建模（BiGRU）+ Attention Pooling + 分类头。
+"""时序建模（BiGRU）+ Attention Pooling + 分类/回归头。
 
 接收融合后的特征序列，输出逐帧或逐片段的方位角 logits。
 
@@ -8,6 +8,7 @@
 
 import torch
 import torch.nn as nn
+import math
 
 
 class TemporalHead(nn.Module):
@@ -42,13 +43,18 @@ class TemporalHead(nn.Module):
         gru_dropout: float = 0.1,
         dropout: float = 0.2,
         use_regression: bool = False,
+        use_pure_regression: bool = False,
         use_attention_pooling: bool = True,
         use_front_back_auxiliary: bool = False,
+        azimuth_range = (-180.0, 180.0),
     ):
         super().__init__()
         self.use_regression = use_regression
+        self.use_pure_regression = use_pure_regression
         self.use_attention_pooling = use_attention_pooling
         self.use_front_back_auxiliary = use_front_back_auxiliary
+        self.num_classes = num_classes
+        self.azimuth_range = tuple(azimuth_range)
 
         self.gru = nn.GRU(
             input_size=input_dim,
@@ -74,14 +80,15 @@ class TemporalHead(nn.Module):
             )
 
         # 分类头：输出离散的方位角类别
-        self.classifier = nn.Linear(gru_out_dim, num_classes)
+        if not self.use_pure_regression:
+            self.classifier = nn.Linear(gru_out_dim, num_classes)
 
         # front/back 辅助头：显式学习前后判别
         if self.use_front_back_auxiliary:
             self.front_back_classifier = nn.Linear(gru_out_dim, 2)
 
         # 回归头：输出连续的方位角值（弧度，范围 [-π, π]）
-        if use_regression:
+        if use_regression and not self.use_pure_regression:
             self.regressor = nn.Sequential(
                 nn.Linear(gru_out_dim, gru_out_dim // 2),
                 nn.ReLU(),
@@ -89,6 +96,19 @@ class TemporalHead(nn.Module):
                 nn.Linear(gru_out_dim // 2, 1),
                 nn.Tanh()  # 输出范围 [-1, 1]，需要乘以π得到弧度
             )
+
+        if self.use_pure_regression:
+            self.vector_regressor = nn.Sequential(
+                nn.Linear(gru_out_dim, gru_out_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(gru_out_dim // 2, 2),
+            )
+
+            centers_deg = self.azimuth_range[0] + (torch.arange(num_classes).float() + 0.5) * (
+                (self.azimuth_range[1] - self.azimuth_range[0]) / num_classes
+            )
+            self.register_buffer("bin_centers_deg", centers_deg, persistent=False)
 
     def forward(self, x: torch.Tensor) -> dict:
         """
@@ -111,16 +131,29 @@ class TemporalHead(nn.Module):
             pooled = gru_out.mean(dim=1)                   # [B, 2*H]
         pooled = self.dropout(pooled)     # [B, 2*H]
 
-        # 分类输出
-        logits = self.classifier(pooled)  # [B, num_classes]
+        if self.use_pure_regression:
+            angle_vec = self.vector_regressor(pooled)  # [B, 2]
+            angle_vec = nn.functional.normalize(angle_vec, dim=-1)
+            pred_deg = torch.rad2deg(torch.atan2(angle_vec[:, 0], angle_vec[:, 1]))  # [B]
 
-        result = {"logits": logits}
+            diff = pred_deg.unsqueeze(-1) - self.bin_centers_deg.unsqueeze(0)  # [B, C]
+            diff = torch.remainder(diff + 180.0, 360.0) - 180.0
+            logits = -torch.abs(diff) / 5.0
+
+            result = {
+                "logits": logits,
+                "angle_vec": angle_vec,
+            }
+        else:
+            # 分类输出
+            logits = self.classifier(pooled)  # [B, num_classes]
+            result = {"logits": logits}
 
         if self.use_front_back_auxiliary:
             result["front_back_logits"] = self.front_back_classifier(pooled)
 
         # 回归输出（如果启用）
-        if self.use_regression:
+        if self.use_regression and not self.use_pure_regression:
             angle_normalized = self.regressor(pooled)  # [B, 1], 范围 [-1, 1]
             angle_rad = angle_normalized.squeeze(-1) * 3.14159265359  # [B], 范围 [-π, π]
             result["angle"] = angle_rad

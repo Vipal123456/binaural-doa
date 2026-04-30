@@ -10,7 +10,7 @@ import torch.nn as nn
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
-from losses import DOALoss, MultiTaskDOALoss, DOAVectorRegressionLoss
+from losses import DOALoss, MultiTaskDOALoss, DOAVectorRegressionLoss, PureRegressionDOALoss
 from metrics import DOAMetrics
 from utils.checkpoint import save_checkpoint, load_checkpoint
 from utils.logger import TBWriter
@@ -53,8 +53,18 @@ class Trainer:
         # 损失函数
         # 检查是否使用多任务loss（分类+回归）
         self.use_regression = getattr(m, 'use_regression', False)
+        self.use_pure_regression = getattr(m, 'use_pure_regression', False)
         self.use_vector_regression = self.model_type == "sdel_doa_reg"
-        if self.use_vector_regression:
+        if self.use_pure_regression:
+            front_back_aux_weight = getattr(t, 'front_back_aux_weight', 0.0)
+            self.criterion = PureRegressionDOALoss(
+                front_back_aux_weight=front_back_aux_weight,
+            )
+            msg = "使用原生 DOA-Net 纯回归loss (cosine angle-vector)"
+            if front_back_aux_weight > 0:
+                msg += f" + front/back辅助头(weight={front_back_aux_weight})"
+            self.logger.info(msg)
+        elif self.use_vector_regression:
             front_back_aux_weight = getattr(t, 'front_back_aux_weight', 0.0)
             self.criterion = DOAVectorRegressionLoss(
                 front_back_aux_weight=front_back_aux_weight,
@@ -278,7 +288,22 @@ class Trainer:
             with autocast(device_type=self.device.type, enabled=self.use_amp):
                 out = self.model(batch)
 
-                if self.use_vector_regression:
+                if self.use_pure_regression:
+                    pred_vec = out["angle_vec"]
+                    true_angle_deg = batch["azimuth_deg"].float()
+                    true_angle_rad = torch.deg2rad(true_angle_deg)
+                    target_vec = torch.stack(
+                        [torch.sin(true_angle_rad), torch.cos(true_angle_rad)],
+                        dim=-1,
+                    ).float()
+                    loss_dict = self.criterion(
+                        pred_vec,
+                        target_vec,
+                        front_back_logits=out.get("front_back_logits"),
+                        front_back_targets=batch.get("front_back_label"),
+                    )
+                    loss = loss_dict["total"]
+                elif self.use_vector_regression:
                     pred_vec = out["angle_vec"]
                     true_angle_deg = batch["azimuth_deg"].float()
                     true_angle_rad = torch.deg2rad(true_angle_deg)
@@ -352,7 +377,18 @@ class Trainer:
             self.global_step += 1
 
             if batch_idx % t.log_interval == 0:
-                if self.use_vector_regression:
+                if self.use_pure_regression:
+                    extra = ""
+                    if loss_dict.get("front_back") is not None:
+                        extra = f" (reg={loss_dict['regression']:.4f}, fb={loss_dict['front_back']:.4f})"
+                    self.logger.info(
+                        f"  [Epoch {epoch}][{batch_idx}/{len(self.train_loader)}] "
+                        f"loss={loss.item():.4f}{extra}"
+                    )
+                    self.tb_writer.add_scalar("train/step_loss_reg", loss_dict["regression"], self.global_step)
+                    if loss_dict.get("front_back") is not None:
+                        self.tb_writer.add_scalar("train/step_loss_fb", loss_dict["front_back"], self.global_step)
+                elif self.use_vector_regression:
                     extra = ""
                     if loss_dict.get("front_back") is not None:
                         extra = f" (vec={loss_dict['classification']:.4f}, fb={loss_dict['front_back']:.4f})"

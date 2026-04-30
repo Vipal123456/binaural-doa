@@ -25,7 +25,7 @@
 - checkpoint：
   - `outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix/best.pth`
 
-当前综合表现最强的**外部 backbone 对照**是：
+当前保留的**外部 baseline 对照**是：
 
 - `SDEL-DOA-Cls + fbaux`
 - 配置：
@@ -107,6 +107,7 @@ test subjects 在训练阶段完全不可见，用于评估 unseen-subject HRTF 
 | v5 + enhanced + fbaux_only + cohfix | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only_cohfix.yaml` | **0.6750** | 0.9180 | 12.70° | 2.50° | 74.37% | 86.96% | 修正 coherence 后更稳 |
 | **v5 + enhanced + fbaux_only + cohfix + no-csl** | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml` | 0.6661 | **0.9317** | **11.92°** | 2.50° | **75.21%** | **87.20%** | **当前推荐原生主线** |
 | v5 + enhanced + fbaux_only + cohfix + reg | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml` | 0.6640 | 0.9360 | 12.40° | 3.54° | 63.83% | 86.09% | 多任务分类+回归，前向更稳但整体 MAE 未优于 no-csl |
+| v5 + enhanced + fbaux_only + cohfix + pure-reg | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml` | 0.4457 | 0.8370 | **11.01°** | **2.40°** | 75.78% | **88.34%** | 原生 backbone 纯回归，显著降低结构性错误 |
 | v5 + enhanced + fbaux_only + cohfix + csl-nols | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_nols_enhanced_fbaux_only_cohfix.yaml` | 0.6563 | 0.9096 | 15.14° | 2.50° | 74.18% | 84.03% | 去掉 label smoothing 明显退化 |
 
 ### 当前主结论
@@ -119,6 +120,11 @@ test subjects 在训练阶段完全不可见，用于评估 unseen-subject HRTF 
 - 在原生 DOA-Net 主线上直接加入多任务回归分支：
   - 可以改善 `front_back_error_rate` 和 `opposite_error_rate`
   - 但没有进一步降低整体 `MAE`
+- 在原生 DOA-Net 主线上改成纯回归：
+  - `MAE` 从 `11.92°` 降到 `11.01°`
+  - `front_back_error_rate` 从 `0.0967` 降到 `0.0816`
+  - `large_error_rate` 从 `0.0667` 降到 `0.0578`
+  - 但 `accuracy / top-3` 会明显下降，因此更适合作为低误差对照而不是新的分类主线
 - 因此当前推荐主线是：
   - `cohfix + no-csl + fbaux_only`
 
@@ -153,6 +159,7 @@ test subjects 在训练阶段完全不可见，用于评估 unseen-subject HRTF 
 | 模型 | 输出形式 | Accuracy | Top-3 | MAE | Median | FB err | Opp err | Large err |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | 当前主线 `cohfix + no-csl + fbaux_only` | 72类分类 | 0.6661 | 0.9317 | 11.92° | 2.50° | 0.0967 | 0.0089 | 0.0667 |
+| `DOA-Net pure-reg + fbaux` | 纯回归 | 0.4457 | 0.8370 | 11.01° | 2.40° | 0.0816 | 0.0063 | 0.0578 |
 | `SDEL-DOA-Reg` | 向量回归 | 0.4112 | 0.8651 | **7.42°** | **2.25°** | **0.0428** | **0.0022** | **0.0316** |
 | `SDEL-DOA-Cls` | 72类分类 | **0.6910** | **0.9558** | 12.77° | 2.50° | 0.0704 | 0.0118 | 0.0620 |
 | **`SDEL-DOA-Cls + fbaux`** | 72类分类 | **0.7201** | **0.9727** | **9.02°** | 2.50° | **0.0422** | 0.0053 | **0.0381** |
@@ -160,11 +167,13 @@ test subjects 在训练阶段完全不可见，用于评估 unseen-subject HRTF 
 
 这组结果说明：
 
-- `SDEL` 风格 CRNN 主干本身很强
+- `SDEL` 风格 CRNN 主干本身很强，但它只是外部对照，不是本文档主线
 - 回归目标非常有利于降低 `MAE` 和前后大错
 - `fbaux` 在外部 backbone 上同样显著有效，说明它具有较好的 backbone-agnostic 特性
-- 当前综合最强的分类模型已经变成：
-  - `SDEL-DOA-Cls + fbaux`
+- 在原生 DOA-Net backbone 上：
+  - 多任务分类+回归没有明显优于分类主线
+  - 纯回归则能稳定降低 `MAE` 和 `front/back` 相关错误
+- `SDEL-DOA-Cls + fbaux` 说明 `fbaux` 对外部 backbone 也有效
 - 当前最值得继续验证的是：
   - `SDEL-DOA-Reg + fbaux`
   - `SDEL backbone + 分类/回归联合任务`
@@ -233,6 +242,7 @@ test subjects 在训练阶段完全不可见，用于评估 unseen-subject HRTF 
   - `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml`
   - `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml`
   - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml`
+  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml`
 
 ### 主线配置变化
 
@@ -309,6 +319,13 @@ python train.py \
   --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml
 ```
 
+### 训练 DOA-Net 纯回归主线
+
+```bash
+python train.py \
+  --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml
+```
+
 ## 项目结构
 
 ```text
@@ -328,6 +345,7 @@ DOA-net/
 │   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only_cohfix.yaml
 │   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml  ★
 │   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml
+│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml
 │   ├── train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml
 │   ├── train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml
 │   └── train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml
@@ -360,7 +378,7 @@ DOA-net/
 - Front/back error rate: `0.0967`
 - Opposite error rate: `0.0089`
 
-当前 strongest classification 对照（外部 backbone）：
+当前外部 strongest classification baseline：
 
 - checkpoint：
   - `outputs/checkpoints_multisubject_robust50h_sdel_doa_cls_fbaux_nw8_gpu1/best.pth`

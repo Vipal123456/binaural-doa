@@ -64,10 +64,12 @@ class BinauralDOANet(nn.Module):
         gru_dropout: float = 0.1,
         # 分类器
         num_classes: int = 72,
+        azimuth_range = (-180.0, 180.0),
         # 通用
         dropout: float = 0.2,
         # 回归
         use_regression: bool = False,
+        use_pure_regression: bool = False,
         # 增强双耳特征
         use_enhanced_binaural_features: bool = False,
         # Attention bias
@@ -157,8 +159,10 @@ class BinauralDOANet(nn.Module):
             gru_dropout=gru_dropout,
             dropout=dropout,
             use_regression=use_regression,
+            use_pure_regression=use_pure_regression,
             use_attention_pooling=use_attention_pooling,
             use_front_back_auxiliary=use_front_back_auxiliary,
+            azimuth_range=tuple(azimuth_range),
         )
 
     def _build_attention_bias(self, d_feat: torch.Tensor) -> tuple:
@@ -303,6 +307,7 @@ def build_model(cfg):
 
     # 检查是否启用回归
     use_regression = getattr(m, 'use_regression', False)
+    use_pure_regression = getattr(m, 'use_pure_regression', False)
     use_gating = getattr(m, 'use_gating', True)
     use_independent_gating = getattr(m, 'use_independent_gating', True)
     use_residual_gating = getattr(m, 'use_residual_gating', True)
@@ -331,6 +336,7 @@ def build_model(cfg):
         num_classes=m.num_classes,
         dropout=m.dropout,
         use_regression=use_regression,
+        use_pure_regression=use_pure_regression,
         use_enhanced_binaural_features=use_enhanced_binaural_features,
         use_attention_bias=use_attention_bias,
         attention_bias_rank=attention_bias_rank,
