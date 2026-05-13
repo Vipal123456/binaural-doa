@@ -236,8 +236,12 @@ class Trainer:
                 mae = val_results["mean_angular_error"]
                 self.logger.info(
                     f"  val  acc={val_results['accuracy']:.4f}  "
-                    f"top{self.metrics.top_k}_acc={val_results['top_k_accuracy']:.4f}  "
-                    f"MAE={mae:.2f}°  median_AE={val_results['median_angular_error']:.2f}°"
+                    f"F1={val_results['f1_score']:.4f}  "
+                    f"MAE={mae:.2f}°  "
+                    f"Acc@5°={val_results.get('acc_at_5deg', 0.0):.4f}  "
+                    f"Acc@10°={val_results.get('acc_at_10deg', 0.0):.4f}  "
+                    f"OppErr={val_results.get('opposite_error_rate', 0.0):.4f}  "
+                    f"median_AE={val_results['median_angular_error']:.2f}°"
                 )
                 for k, v in val_results.items():
                     self.tb_writer.add_scalar(f"val/{k}", v, epoch)

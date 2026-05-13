@@ -43,7 +43,7 @@ def main():
 
     # ---- 数据 ----
     logger.info("正在构建数据集...")
-    train_ds, val_ds, test_ds = build_static_datasets(cfg)
+    train_ds, val_ds, test_ds = build_static_datasets(cfg, logger=logger)
     logger.info(f"训练集: {len(train_ds)} 个片段 | 验证集: {len(val_ds)} | 测试集: {len(test_ds)}")
 
     t = cfg.train

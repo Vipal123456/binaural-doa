@@ -77,3 +77,91 @@ class BinauralEncoder(nn.Module):
         h = h.permute(0, 2, 1)        # [B, T', C_last]
         h = self.proj(h)              # [B, T', out_dim]
         return h
+
+
+class _BalancedEncoderStage(nn.Module):
+    """两步式轻量卷积 stage。
+
+    先用一层常规 3x3 卷积做局部特征提取，再用 depthwise separable
+    卷积沿频率轴下采样。相比单层 stride 卷积，这种写法更适合在压缩前
+    先完成一点去噪/去混响式的局部建模。
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, dropout: float):
+        super().__init__()
+        self.pre_conv = nn.Sequential(
+            nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size=(3, 3),
+                stride=(1, 1),
+                padding=(1, 1),
+            ),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+        self.downsample = nn.Sequential(
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=(3, 3),
+                stride=(1, 2),
+                padding=(1, 1),
+                groups=out_channels,
+            ),
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=(1, 1),
+                stride=(1, 1),
+                padding=(0, 0),
+            ),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.pre_conv(x)
+        x = self.downsample(x)
+        return x
+
+
+class BinauralEncoderV2Balanced(nn.Module):
+    """更偏鲁棒性的轻量 2D CNN 编码器。
+
+    每个 stage 由两部分组成：
+      1. 常规 3x3 卷积（不下采样）先提局部特征
+      2. depthwise separable 3x3 卷积沿频率轴下采样
+
+    这样能在保持较低参数量的同时，让前端在频率压缩前多看一眼局部结构。
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        channels: List[int] = None,
+        out_dim: int = 128,
+        dropout: float = 0.2,
+    ):
+        super().__init__()
+        if channels is None:
+            channels = [24, 40, 64]
+
+        blocks = []
+        ch_in = in_channels
+        for ch_out in channels:
+            blocks.append(_BalancedEncoderStage(ch_in, ch_out, dropout))
+            ch_in = ch_out
+
+        self.conv_blocks = nn.Sequential(*blocks)
+        self.freq_pool = nn.AdaptiveAvgPool2d((None, 1))
+        self.proj = nn.Linear(channels[-1], out_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.conv_blocks(x)
+        h = self.freq_pool(h)
+        h = h.squeeze(-1)
+        h = h.permute(0, 2, 1)
+        h = self.proj(h)
+        return h

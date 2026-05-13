@@ -37,9 +37,19 @@ feature:
   window: "hann"
 
 model:
+  type: "binaural_doa_net"
   # 共享编码器
   encoder_channels: [32, 64, 128]   # 卷积通道数递增序列
   encoder_out_dim: 128               # 每只耳朵的输出特征维度
+
+  # native_lite_v7 专用：双耳线索压缩与低维融合
+  content_input_mode: "logmag"
+  use_cue_stream: true
+  cue_feature_mode: "all"
+  use_cross_ear_interaction: false
+  cue_bands: 32
+  cue_hidden_dim: 64
+  fusion_dim: 160
 
   # IPD / ILD 投影
   proj_dim: 128                      # IPD/ILD 投影后的维度
@@ -68,6 +78,9 @@ model:
   # 通用设置
   dropout: 0.2
   use_front_back_auxiliary: false
+  use_simple_binaural_fusion: false   # 简化版 native 主线：显式差异融合，绕开 prior/attention/gating
+  use_simple_cross_attention: false    # 在 simple fusion 上恢复无 bias/gating 的跨耳交互
+  use_raw_ipd: true                   # 简化版中是否保留原始 IPD；建议与 sin/cos(IPD) 消融对比
 
 train:
   batch_size: 32

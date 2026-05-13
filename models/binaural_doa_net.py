@@ -29,6 +29,7 @@ from models.difference_prior import IPDILDProjection, DifferencePrior
 from models.cross_attention import BidirectionalCrossAttention
 from models.gating import GatingModule
 from models.temporal_head import TemporalHead
+from models.native_lite_v7 import NativeLiteDOANet
 from models.sdel_crnn_baseline import SDELCRNNBaseline
 
 
@@ -79,6 +80,10 @@ class BinauralDOANet(nn.Module):
         use_attention_pooling: bool = True,
         # 前后辅助任务
         use_front_back_auxiliary: bool = False,
+        # 简化版 native 主线
+        use_simple_binaural_fusion: bool = False,
+        use_simple_cross_attention: bool = False,
+        use_raw_ipd: bool = True,
     ):
         super().__init__()
         if encoder_channels is None:
@@ -93,63 +98,87 @@ class BinauralDOANet(nn.Module):
         )
 
         self.use_enhanced_binaural_features = use_enhanced_binaural_features
+        self.use_simple_binaural_fusion = use_simple_binaural_fusion
+        self.use_simple_cross_attention = use_simple_cross_attention
+        self.use_raw_ipd = use_raw_ipd
 
-        # 增强特征开启时：
-        # ipd 输入 = [ipd, sin(ipd), cos(ipd), coherence] -> 4F
-        # ild 输入 = [ild, coherence] -> 2F
-        ipd_in_bins = freq_bins * 4 if self.use_enhanced_binaural_features else freq_bins
-        ild_in_bins = freq_bins * 2 if self.use_enhanced_binaural_features else freq_bins
-
-        # --- 2. IPD / ILD 投影 ---
-        self.ipd_ild_proj = IPDILDProjection(
-            freq_bins=freq_bins,
-            proj_dim=proj_dim,
-            ipd_in_bins=ipd_in_bins,
-            ild_in_bins=ild_in_bins,
-        )
-
-        # --- 3. 差异先验 ---
-        self.diff_prior = DifferencePrior(
-            enc_dim=encoder_out_dim,
-            proj_dim=proj_dim,
-            hidden_dim=prior_hidden_dim,
-            out_dim=prior_out_dim,
-            dropout=dropout,
-        )
-
-        # --- 4. 双向交叉注意力 ---
-        self.cross_attn = BidirectionalCrossAttention(
-            embed_dim=attention_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-        )
-
-        # --- 4.1 差异先验引导的双向attention bias ---
-        self.use_attention_bias = use_attention_bias
-        self.attention_bias_rank = max(int(attention_bias_rank), 1)
-        if self.use_attention_bias:
-            r = self.attention_bias_rank
-            self.bias_u_lr = nn.Linear(prior_out_dim, r)
-            self.bias_v_lr = nn.Linear(prior_out_dim, r)
-            self.bias_u_rl = nn.Linear(prior_out_dim, r)
-            self.bias_v_rl = nn.Linear(prior_out_dim, r)
-
-        # --- 5. 门控 ---
-        self.use_gating = use_gating
-        if self.use_gating:
-            self.gating = GatingModule(
-                prior_dim=prior_out_dim,
-                gate_dim=gate_dim,
-                use_independent_gating=use_independent_gating,
-                use_residual_gating=use_residual_gating,
-            )
-        else:
+        if self.use_simple_binaural_fusion:
+            cue_in_bins = freq_bins * 4 if self.use_enhanced_binaural_features else freq_bins * 2
+            self.simple_cue_proj = nn.Linear(cue_in_bins, proj_dim)
+            self.ipd_ild_proj = None
+            self.diff_prior = None
+            if self.use_simple_cross_attention:
+                self.cross_attn = BidirectionalCrossAttention(
+                    embed_dim=encoder_out_dim,
+                    num_heads=num_heads,
+                    dropout=dropout,
+                )
+            else:
+                self.cross_attn = None
+            self.use_attention_bias = False
+            self.attention_bias_rank = 0
             self.gating = None
+            self.use_gating = False
+            # 简化主线：保留左右耳内容、显式差异和轻量双耳线索投影。
+            fused_dim = 4 * encoder_out_dim + proj_dim
+            if self.use_simple_cross_attention:
+                fused_dim += 2 * encoder_out_dim
+        else:
+            # 增强特征开启时：
+            # ipd 输入 = [ipd, sin(ipd), cos(ipd), coherence] -> 4F
+            # ild 输入 = [ild, coherence] -> 2F
+            ipd_in_bins = freq_bins * 4 if self.use_enhanced_binaural_features else freq_bins
+            ild_in_bins = freq_bins * 2 if self.use_enhanced_binaural_features else freq_bins
 
-        # --- 6+7. 时序头 ---
-        # 融合特征 = [F_L, F_R, gated_A_LR, gated_A_RL, (F_L - F_R)]
-        # 各维度:      D     D     D           D           D
-        fused_dim = 5 * encoder_out_dim
+            # --- 2. IPD / ILD 投影 ---
+            self.ipd_ild_proj = IPDILDProjection(
+                freq_bins=freq_bins,
+                proj_dim=proj_dim,
+                ipd_in_bins=ipd_in_bins,
+                ild_in_bins=ild_in_bins,
+            )
+
+            # --- 3. 差异先验 ---
+            self.diff_prior = DifferencePrior(
+                enc_dim=encoder_out_dim,
+                proj_dim=proj_dim,
+                hidden_dim=prior_hidden_dim,
+                out_dim=prior_out_dim,
+                dropout=dropout,
+            )
+
+            # --- 4. 双向交叉注意力 ---
+            self.cross_attn = BidirectionalCrossAttention(
+                embed_dim=attention_dim,
+                num_heads=num_heads,
+                dropout=dropout,
+            )
+
+            # --- 4.1 差异先验引导的双向attention bias ---
+            self.use_attention_bias = use_attention_bias
+            self.attention_bias_rank = max(int(attention_bias_rank), 1)
+            if self.use_attention_bias:
+                r = self.attention_bias_rank
+                self.bias_u_lr = nn.Linear(prior_out_dim, r)
+                self.bias_v_lr = nn.Linear(prior_out_dim, r)
+                self.bias_u_rl = nn.Linear(prior_out_dim, r)
+                self.bias_v_rl = nn.Linear(prior_out_dim, r)
+
+            # --- 5. 门控 ---
+            self.use_gating = use_gating
+            if self.use_gating:
+                self.gating = GatingModule(
+                    prior_dim=prior_out_dim,
+                    gate_dim=gate_dim,
+                    use_independent_gating=use_independent_gating,
+                    use_residual_gating=use_residual_gating,
+                )
+            else:
+                self.gating = None
+
+            # --- 6+7. 时序头 ---
+            # 融合特征 = [F_L, F_R, gated_A_LR, gated_A_RL, (F_L - F_R)]
+            fused_dim = 5 * encoder_out_dim
 
         self.temporal_head = TemporalHead(
             input_dim=fused_dim,
@@ -208,60 +237,78 @@ class BinauralDOANet(nn.Module):
         ipd_aligned = ipd[:, :T_enc, :]   # [B, T', F]
         ild_aligned = ild[:, :T_enc, :]   # [B, T', F]
 
+        ipd_sin = batch.get("ipd_sin")
+        ipd_cos = batch.get("ipd_cos")
+        coh = batch.get("coherence")
+
         if self.use_enhanced_binaural_features:
             # 若batch中未提供增强特征，则退化为在线构造以保证兼容。
-            coh = batch.get("coherence")
             if coh is None:
                 coh = torch.ones_like(ipd_aligned)
             else:
                 coh = coh[:, :T_enc, :]
 
-            ipd_sin = batch.get("ipd_sin")
             if ipd_sin is None:
                 ipd_sin = torch.sin(ipd_aligned)
             else:
                 ipd_sin = ipd_sin[:, :T_enc, :]
 
-            ipd_cos = batch.get("ipd_cos")
             if ipd_cos is None:
                 ipd_cos = torch.cos(ipd_aligned)
             else:
                 ipd_cos = ipd_cos[:, :T_enc, :]
 
-            ipd_aligned = torch.cat([ipd_aligned, ipd_sin, ipd_cos, coh], dim=-1)
+            if not self.use_simple_binaural_fusion or self.use_raw_ipd:
+                ipd_aligned = torch.cat([ipd_aligned, ipd_sin, ipd_cos, coh], dim=-1)
             ild_aligned = torch.cat([ild_aligned, coh], dim=-1)
 
-        # ---- 第 2 步: IPD / ILD 投影 ----
-        ipd_proj, ild_proj = self.ipd_ild_proj(ipd_aligned, ild_aligned)
-        # ipd_proj: [B, T', proj_dim],  ild_proj: [B, T', proj_dim]
-
-        # ---- 第 3 步: 差异先验 ----
-        d_feat = self.diff_prior(f_l, f_r, ipd_proj, ild_proj)  # [B, T', prior_out_dim]
-
-        # ---- 第 4 步: 双向交叉注意力（可选score bias）----
-        if self.use_attention_bias:
-            bias_lr, bias_rl = self._build_attention_bias(d_feat)
+        if self.use_simple_binaural_fusion:
+            diff = f_l - f_r
+            abs_diff = diff.abs()
+            if self.use_enhanced_binaural_features:
+                cue_parts = [ild[:, :T_enc, :]]
+                if self.use_raw_ipd:
+                    cue_parts.append(ipd[:, :T_enc, :])
+                cue_parts.extend([ipd_sin, ipd_cos, coh])
+                cue_in = torch.cat(cue_parts, dim=-1)
+            else:
+                cue_in = torch.cat([ild_aligned, ipd[:, :T_enc, :]], dim=-1)
+            cue_proj = self.simple_cue_proj(cue_in)
+            fused_parts = [f_l, f_r]
+            if self.use_simple_cross_attention and self.cross_attn is not None:
+                a_lr, a_rl = self.cross_attn(f_l, f_r, bias_lr=None, bias_rl=None)
+                fused_parts.extend([a_lr, a_rl])
+            fused_parts.extend([diff, abs_diff, cue_proj])
+            fused = torch.cat(fused_parts, dim=-1)
+            d_feat = cue_proj
         else:
-            bias_lr, bias_rl = None, None
+            # ---- 第 2 步: IPD / ILD 投影 ----
+            ipd_proj, ild_proj = self.ipd_ild_proj(ipd_aligned, ild_aligned)
+            # ---- 第 3 步: 差异先验 ----
+            d_feat = self.diff_prior(f_l, f_r, ipd_proj, ild_proj)
 
-        a_lr, a_rl = self.cross_attn(f_l, f_r, bias_lr=bias_lr, bias_rl=bias_rl)  # 各 [B, T', D_enc]
+            # ---- 第 4 步: 双向交叉注意力（可选score bias）----
+            if self.use_attention_bias:
+                bias_lr, bias_rl = self._build_attention_bias(d_feat)
+            else:
+                bias_lr, bias_rl = None, None
 
-        # ---- 第 5 步: 门控 ----
-        if self.use_gating:
-            gated_a_lr, gated_a_rl = self.gating(d_feat, a_lr, a_rl, f_l, f_r)
-            # 各 [B, T', gate_dim]
-        else:
-            # 门控消融：直接使用注意力输出，不做调制
-            gated_a_lr, gated_a_rl = a_lr, a_rl
+            a_lr, a_rl = self.cross_attn(f_l, f_r, bias_lr=bias_lr, bias_rl=bias_rl)
 
-        # ---- 第 6 步: 融合 ----
-        fused = torch.cat([
-            f_l,                # [B, T', D_enc]
-            f_r,                # [B, T', D_enc]
-            gated_a_lr,         # [B, T', D_enc]
-            gated_a_rl,         # [B, T', D_enc]
-            f_l - f_r,          # [B, T', D_enc]
-        ], dim=-1)              # [B, T', 5 * D_enc]
+            # ---- 第 5 步: 门控 ----
+            if self.use_gating:
+                gated_a_lr, gated_a_rl = self.gating(d_feat, a_lr, a_rl, f_l, f_r)
+            else:
+                gated_a_lr, gated_a_rl = a_lr, a_rl
+
+            # ---- 第 6 步: 融合 ----
+            fused = torch.cat([
+                f_l,
+                f_r,
+                gated_a_lr,
+                gated_a_rl,
+                f_l - f_r,
+            ], dim=-1)
 
         # ---- 第 7 步: 时序建模 + 分类器 + 回归器 ----
         outputs = self.temporal_head(fused)  # dict with "logits" and optionally "angle"
@@ -305,6 +352,31 @@ def build_model(cfg):
             output_mode="reg" if model_type == "sdel_doa_reg" else "cls",
         )
 
+    if model_type == "native_lite_v7":
+        return NativeLiteDOANet(
+            freq_bins=freq_bins,
+            encoder_channels=getattr(m, "encoder_channels", [24, 48, 96]),
+            encoder_out_dim=getattr(m, "encoder_out_dim", 96),
+            encoder_variant=getattr(m, "encoder_variant", "v1"),
+            content_input_mode=getattr(m, "content_input_mode", "logmag"),
+            use_cue_stream=getattr(m, "use_cue_stream", True),
+            cue_feature_mode=getattr(m, "cue_feature_mode", "all"),
+            use_cross_ear_interaction=getattr(m, "use_cross_ear_interaction", False),
+            cue_bands=getattr(m, "cue_bands", 32),
+            cue_hidden_dim=getattr(m, "cue_hidden_dim", 64),
+            fusion_dim=getattr(m, "fusion_dim", 160),
+            gru_hidden_size=m.gru_hidden_size,
+            gru_num_layers=m.gru_num_layers,
+            gru_dropout=m.gru_dropout,
+            num_classes=m.num_classes,
+            azimuth_range=tuple(m.azimuth_range),
+            dropout=m.dropout,
+            use_attention_pooling=getattr(m, "use_attention_pooling", True),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", True),
+            use_regression=getattr(m, "use_regression", False),
+            use_pure_regression=getattr(m, "use_pure_regression", False),
+        )
+
     # 检查是否启用回归
     use_regression = getattr(m, 'use_regression', False)
     use_pure_regression = getattr(m, 'use_pure_regression', False)
@@ -316,6 +388,9 @@ def build_model(cfg):
     attention_bias_rank = getattr(m, 'attention_bias_rank', 16)
     use_attention_pooling = getattr(m, 'use_attention_pooling', True)
     use_front_back_auxiliary = getattr(m, 'use_front_back_auxiliary', False)
+    use_simple_binaural_fusion = getattr(m, 'use_simple_binaural_fusion', False)
+    use_simple_cross_attention = getattr(m, 'use_simple_cross_attention', False)
+    use_raw_ipd = getattr(m, 'use_raw_ipd', True)
 
     return BinauralDOANet(
         freq_bins=freq_bins,
@@ -342,4 +417,7 @@ def build_model(cfg):
         attention_bias_rank=attention_bias_rank,
         use_attention_pooling=use_attention_pooling,
         use_front_back_auxiliary=use_front_back_auxiliary,
+        use_simple_binaural_fusion=use_simple_binaural_fusion,
+        use_simple_cross_attention=use_simple_cross_attention,
+        use_raw_ipd=use_raw_ipd,
     )

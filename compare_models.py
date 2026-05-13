@@ -8,20 +8,25 @@ from pathlib import Path
 
 METRIC_KEYS = [
     "accuracy",
-    "top_k_accuracy",
+    "f1_score",
     "mean_angular_error",
     "median_angular_error",
     "std_angular_error",
-    "error_lt_5",
-    "error_lt_10",
-    "error_lt_20",
-    "error_lt_30",
+    "acc_at_5deg",
+    "acc_at_10deg",
+    "acc_at_20deg",
+    "acc_at_30deg",
+    "within_1bin_acc",
+    "front_back_halfplane_error_rate",
+    "opposite_error_rate",
 ]
 
 LOWER_IS_BETTER = {
     "mean_angular_error",
     "median_angular_error",
     "std_angular_error",
+    "front_back_halfplane_error_rate",
+    "opposite_error_rate",
 }
 
 
@@ -78,13 +83,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--base_log",
         type=Path,
-        default=Path("outputs/logs_librispeech_subject003_cipic_reverb_demand50h_v2_test_full_best/train.log"),
+        default=Path("outputs/logs_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix_test_best_workers4/train.log"),
         help="基线实验评估日志路径",
     )
     parser.add_argument(
         "--new_log",
         type=Path,
-        default=Path("outputs/logs_librispeech_subject003_cipic_reverb_demand50h_v3_regression_test_full_best/train.log"),
+        default=Path("outputs/logs_multisubject_robust50h_sdel_doa_cls_fbaux_nw8_gpu1_test_best_workers8/train.log"),
         help="新实验评估日志路径",
     )
     args = parser.parse_args()

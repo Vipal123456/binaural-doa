@@ -35,7 +35,6 @@ def analyze_predictions(model, dataset, cfg):
     metrics = DOAMetrics(
         num_classes=cfg.model.num_classes,
         azimuth_range=tuple(cfg.model.azimuth_range),
-        top_k=3
     )
 
     all_errors = []
@@ -155,11 +154,14 @@ def print_error_analysis(errors, pred_degs, true_degs, results):
     # 分类性能
     print(f"\n🎯 分类性能:")
     print(f"  Top-1 准确率: {results['accuracy']*100:.2f}%")
-    print(f"  Top-3 准确率: {results['top_k_accuracy']*100:.2f}%")
-    print(f"  <5°误差占比:  {results['error_lt_5']*100:.2f}%")
-    print(f"  <10°误差占比: {results['error_lt_10']*100:.2f}%")
-    print(f"  <20°误差占比: {results['error_lt_20']*100:.2f}%")
-    print(f"  <30°误差占比: {results['error_lt_30']*100:.2f}%")
+    print(f"  F1-score:     {results['f1_score']*100:.2f}%")
+    print(f"  Acc@5°:       {results['acc_at_5deg']*100:.2f}%")
+    print(f"  Acc@10°:      {results['acc_at_10deg']*100:.2f}%")
+    print(f"  Acc@20°:      {results['acc_at_20deg']*100:.2f}%")
+    print(f"  Acc@30°:      {results['acc_at_30deg']*100:.2f}%")
+    print(f"  Half-plane Err: {results['front_back_halfplane_error_rate']*100:.2f}%")
+    print(f"  Opposite Err:   {results['opposite_error_rate']*100:.2f}%")
+    print(f"  Within-1-bin Acc: {results['within_1bin_acc']*100:.2f}%")
 
     print("\n" + "="*80)
 

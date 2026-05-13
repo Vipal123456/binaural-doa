@@ -164,7 +164,7 @@ def main():
     logger.info("测试结果")
     logger.info("=" * 60)
     logger.info(f"  准确率 (Accuracy):           {results['accuracy']:.4f} ({results['accuracy']*100:.2f}%)")
-    logger.info(f"  Top-3 准确率:                {results['top_k_accuracy']:.4f} ({results['top_k_accuracy']*100:.2f}%)")
+    logger.info(f"  F1-score:                    {results['f1_score']:.4f} ({results['f1_score']*100:.2f}%)")
     logger.info(f"  平均角度误差 (MAE):          {results['mean_angular_error']:.2f}°")
     logger.info(f"  中位数角度误差 (Median AE):  {results['median_angular_error']:.2f}°")
     logger.info(f"  标准差:                      {results['std_angular_error']:.2f}°")
@@ -173,10 +173,13 @@ def main():
 
     # 分析误差分布
     logger.info("\n误差分布分析:")
-    logger.info(f"  误差 < 5°:   {results.get('error_lt_5', 0):.4f} ({results.get('error_lt_5', 0)*100:.2f}%)")
-    logger.info(f"  误差 < 10°:  {results.get('error_lt_10', 0):.4f} ({results.get('error_lt_10', 0)*100:.2f}%)")
-    logger.info(f"  误差 < 20°:  {results.get('error_lt_20', 0):.4f} ({results.get('error_lt_20', 0)*100:.2f}%)")
-    logger.info(f"  误差 < 30°:  {results.get('error_lt_30', 0):.4f} ({results.get('error_lt_30', 0)*100:.2f}%)")
+    logger.info(f"  Acc@5°:      {results.get('acc_at_5deg', 0):.4f} ({results.get('acc_at_5deg', 0)*100:.2f}%)")
+    logger.info(f"  Acc@10°:     {results.get('acc_at_10deg', 0):.4f} ({results.get('acc_at_10deg', 0)*100:.2f}%)")
+    logger.info(f"  Acc@20°:     {results.get('acc_at_20deg', 0):.4f} ({results.get('acc_at_20deg', 0)*100:.2f}%)")
+    logger.info(f"  Acc@30°:     {results.get('acc_at_30deg', 0):.4f} ({results.get('acc_at_30deg', 0)*100:.2f}%)")
+    logger.info(f"  Half-plane Err: {results.get('front_back_halfplane_error_rate', 0):.4f}")
+    logger.info(f"  Opposite Err:   {results.get('opposite_error_rate', 0):.4f}")
+    logger.info(f"  Within-1-bin Acc: {results.get('within_1bin_acc', 0):.4f}")
     logger.info("=" * 60)
 
 

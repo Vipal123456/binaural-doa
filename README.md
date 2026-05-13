@@ -1,330 +1,394 @@
 # 双耳 DOA-Net
 
-基于 `LibriSpeech + CIPIC HRTF + 房间混响 + DEMAND 噪声` 的双耳声源到达方向（DOA）估计项目。  
-当前 README 以 **robust50h 多 subject、subject-disjoint unseen-subject 泛化实验** 为主线；早期 `subject_003` 单 subject 路线仅保留阶段性结果，不再作为文档主轴。
+基于 `LibriSpeech + CIPIC HRTF + 房间混响 + DEMAND 噪声` 的双耳声源到达方向（DOA）估计项目。
 
-## 主线概览
+当前仓库已经收束到 `robust50h 多 subject / subject-disjoint unseen-subject` 主线。早期 `subject003` 单 subject 数据、旧诊断流水线和部分历史绘图脚本已经从当前工作树移除，README 也只保留还存在的配置、脚本和输出。
 
-当前主线任务是：
+## 当前主线
 
-- 使用 `30` 个 CIPIC subject 构建多 subject 双耳数据集
-- 按 `24 / 3 / 3` 做 `train / val / test` 的 subject-disjoint 划分
-- 在 unseen-subject test 上评估 HRTF 泛化
-- 重点关注：
-  - `MAE`
-  - `front_back_error_rate`
+- 数据协议：`30` 个 CIPIC subjects，按 `24 / 3 / 3` 划分 `train / val / unseen-test`
+- 主目标：在 unseen-subject test 上评估 HRTF 泛化
+- 当前评估重点：
+  - `accuracy`
+  - `f1_score`
+  - `mean_angular_error`
+  - `acc_at_5deg`
+  - `acc_at_10deg`
+  - `front_back_halfplane_error_rate`
   - `opposite_error_rate`
   - `large_error_rate`
   - `front / back / side MAE`
 
-当前推荐的**原生 DOA-Net 主线**是：
+当前推荐的原生 DOA-Net 主线：
 
-- `v5 + enhanced + fbaux_only + cohfix + no-csl`
 - 配置：
   - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml`
 - checkpoint：
   - `outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix/best.pth`
+- test log：
+  - `outputs/logs_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix_test_best_workers4/train.log`
 
-当前保留的**外部 baseline 对照**是：
+当前最强外部分类 baseline：
 
-- `SDEL-DOA-Cls + fbaux`
 - 配置：
   - `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml`
 - checkpoint：
   - `outputs/checkpoints_multisubject_robust50h_sdel_doa_cls_fbaux_nw8_gpu1/best.pth`
+- test log：
+  - `outputs/logs_multisubject_robust50h_sdel_doa_cls_fbaux_nw8_gpu1_test_best_workers8/train.log`
 
-## 数据集主线
+当前推荐的轻量 native `v7` 主线：
 
-### robust50h 多 subject 数据集
+- 配置：
+  - `configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml`
+- checkpoint：
+  - `outputs/checkpoints_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix/best.pth`
+- test 结果：
+  - `accuracy = 0.6644`
+  - `f1_score = 0.3856`
+  - `mean_angular_error = 12.91°`
+  - `acc_at_5deg = 0.7526`
+  - `acc_at_10deg = 0.8550`
 
-- 根目录：
-  - `data/librispeech_cipic_multisubject_robust50h_v1`
-- 语音：
-  - `LibriSpeech/train-clean-100`
-- HRTF：
-  - `/disk2/bywang/data/HRTF/subject_*.sofa`
-- 噪声：
-  - `DEMAND`
-- 采样率：
-  - `16 kHz`
-- 单条音频长度：
-  - `10 s`
-- 训练片段长度：
-  - `2 s`
-- 总规模：
-  - `18,000` 条，约 `50 h`
+## 数据集
 
-### 几何与合成设置
+主用数据集根目录：
 
-这版 robust50h 数据集采用：
+- `data/librispeech_cipic_multisubject_robust50h_v1`
 
-- 接收者平面位置随机
-- 接收者高度固定 `1.5 m`
-- 头朝向固定
-- 声源距离 `1.0 - 1.5 m`
-- 声源与接收者均在水平面
-- `metadata_azimuth == HRTF_azimuth == room_source_azimuth`
+关键设置：
 
-对应脚本：
+- 语音：`LibriSpeech/train-clean-100`
+- HRTF：`/disk2/bywang/data/HRTF/subject_*.sofa`
+- 噪声：`DEMAND`
+- 采样率：`16 kHz`
+- 单条音频长度：`10 s`
+- 训练片段长度：`2 s`
+- 总规模：`18,000` 条，约 `50 h`
+
+对应数据合成脚本：
 
 - `prepare_robust_multisubject_dataset.py`
 
-### subject-disjoint 划分
+## 当前结果
 
-- train subjects: `24`
-- val subjects: `3`
-- test subjects unseen: `3`
+### 核心结果
 
-test subjects 在训练阶段完全不可见，用于评估 unseen-subject HRTF 泛化。
+| 模型 | 配置 | Accuracy | F1-score | MAE | Acc@5° | Acc@10° | FB err | Opp err | Large err |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 原生主线 `v5 + enhanced + fbaux_only + cohfix + no-csl` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml` | 0.6661 | 0.3828 | 11.92° | 0.7429 | 0.8720 | 0.0967 | 0.0089 | 0.0667 |
+| 轻量主线 `v7 + encoder v2 balanced + fbaux` | `train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml` | 0.6644 | 0.3856 | 12.91° | 0.7526 | 0.8550 | 0.0916 | 0.0064 | 0.0731 |
+| `DOA-Net pure-reg + fbaux` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml` | 0.4457 | 0.3196 | 11.01° | 0.7438 | 0.8834 | 0.0816 | 0.0063 | 0.0578 |
+| `DOA-Net cls + reg + fbaux` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml` | 0.6640 | 0.3772 | 12.40° | 0.7380 | 0.8609 | 0.0892 | 0.0057 | 0.0679 |
+| `SDEL-DOA-Reg` | `train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml` | 0.4112 | 0.3202 | **7.42°** | 0.7780 | 0.9246 | 0.0428 | 0.0022 | 0.0316 |
+| `SDEL-DOA-Cls` | `train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml` | 0.6910 | 0.3897 | 12.77° | 0.7514 | 0.8843 | 0.0704 | 0.0118 | 0.0620 |
+| `SDEL-DOA-Cls + fbaux` | `train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml` | **0.7201** | **0.4127** | **9.02°** | **0.8032** | **0.9221** | **0.0422** | 0.0053 | **0.0381** |
 
-## 历史演进：v2 到 v5
+### 当前结论
 
-下面这组结果保留为项目演进记录，用来说明模型从早期混合难度数据到 v5 主干的改进轨迹。  
-这一部分是**历史阶段结果**，不是当前文档主线。
+- `front/back auxiliary head` 仍然是最稳定、最有迁移性的改动。
+- `coherence` 修正后，原生主线在 unseen-subject test 上更稳。
+- 在原生 backbone 上：
+  - `no-csl + fbaux_only + cohfix` 是当前最均衡的分类主线。
+  - `v7 + encoder v2 balanced` 是当前更推荐的轻量 native 版本；相比原始 `v7 native_lite`，`F1 / MAE / Acc@5° / Acc@10°` 全部提升。
+  - 纯回归进一步降低 `MAE` 和结构性大错，但分类指标明显下降。
+  - 分类 + 回归联合没有超过当前原生分类主线。
+- 在外部 backbone 上：
+  - `SDEL-DOA-Cls + fbaux` 是当前最强分类结果。
+  - `SDEL-DOA-Reg` 的 `MAE` 最低，仍值得继续做 `+ fbaux` 或联合任务验证。
 
-| 版本 | 数据配置 | Accuracy | Top-3 | MAE | Median | error<5° | 关键变化 |
-|---|---|---:|---:|---:|---:|---:|---|
-| v2 | 混合难度 | 0.7067 | 0.8649 | 9.67° | 2.24° | 77.6% | 数据混合、训练稳定化 |
-| v3 | 混合难度 + 回归分支 | 0.7280 | 0.8695 | 9.69° | 2.42° | 72.4% | 分类 + DOA 回归 |
-| v4 | 混合难度 + 增强特征 | 0.6952 | 0.8692 | 9.86° | 2.24° | 77.3% | `sin/cos(IPD)` 等增强特征 |
-| v5 | 混合难度 + 创新主干 | **0.7344** | **0.8744** | **8.72°** | **2.14°** | **80.5%** | attention bias + 独立门控 + attention pooling |
+## 当前代码结构
 
-阶段结论：
-
-- `v5` 是单 subject 阶段最强主干
-- `v4` 说明增强双耳特征有价值，但仅靠输入增强不足以替代结构改动
-- `v3` 的回归分支在当时没有稳定带来 MAE 改善
-
-## robust50h unseen-subject 主线结果
-
-### 主线结果对比
-
-| 版本 | 配置 | Accuracy | Top-3 | MAE | Median | error<5° | error<10° | 说明 |
-|---|---|---:|---:|---:|---:|---:|---:|---|
-| v5 baseline | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml` | 0.6198 | 0.9028 | 15.90° | 2.50° | 71.20% | 82.66% | 原 robust50h 主线 |
-| v5 + enhanced | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml` | 0.6432 | 0.8970 | 13.77° | 2.50° | 72.73% | 85.28% | enhanced 输入特征 |
-| v5 + enhanced + fbaux_only | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml` | 0.6489 | 0.8832 | 11.97° | 2.50° | 74.21% | 86.93% | 旧 coherence 条件下最佳 |
-| v5 + enhanced + fbaux_only + cohfix | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only_cohfix.yaml` | **0.6750** | 0.9180 | 12.70° | 2.50° | 74.37% | 86.96% | 修正 coherence 后更稳 |
-| **v5 + enhanced + fbaux_only + cohfix + no-csl** | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml` | 0.6661 | **0.9317** | **11.92°** | 2.50° | **75.21%** | **87.20%** | **当前推荐原生主线** |
-| v5 + enhanced + fbaux_only + cohfix + reg | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml` | 0.6640 | 0.9360 | 12.40° | 3.54° | 63.83% | 86.09% | 多任务分类+回归，前向更稳但整体 MAE 未优于 no-csl |
-| v5 + enhanced + fbaux_only + cohfix + pure-reg | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml` | 0.4457 | 0.8370 | **11.01°** | **2.40°** | 75.78% | **88.34%** | 原生 backbone 纯回归，显著降低结构性错误 |
-| v5 + enhanced + fbaux_only + cohfix + csl-nols | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_nols_enhanced_fbaux_only_cohfix.yaml` | 0.6563 | 0.9096 | 15.14° | 2.50° | 74.18% | 84.03% | 去掉 label smoothing 明显退化 |
-
-### 当前主结论
-
-- `front/back auxiliary head` 是当前最有效的结构改动
-- `coherence` 修正后，主线在 unseen-subject test 上更稳
-- 在修正后的主线上：
-  - `label smoothing` 应保留
-  - `circular soft label` 会伤害 unseen-subject test 泛化
-- 在原生 DOA-Net 主线上直接加入多任务回归分支：
-  - 可以改善 `front_back_error_rate` 和 `opposite_error_rate`
-  - 但没有进一步降低整体 `MAE`
-- 在原生 DOA-Net 主线上改成纯回归：
-  - `MAE` 从 `11.92°` 降到 `11.01°`
-  - `front_back_error_rate` 从 `0.0967` 降到 `0.0816`
-  - `large_error_rate` 从 `0.0667` 降到 `0.0578`
-  - 但 `accuracy / top-3` 会明显下降，因此更适合作为低误差对照而不是新的分类主线
-- 因此当前推荐主线是：
-  - `cohfix + no-csl + fbaux_only`
-
-### fbaux_only 权重 sweep
-
-| aux weight | 配置 | best val MAE | test Accuracy | test Top-3 | test MAE | test std | error<5° | error<10° | 说明 |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| `0.10` | `..._fbaux_w010.yaml` | 10.28° | **0.6563** | 0.8979 | 12.84° | 32.84 | 73.14% | 85.80% | 准确率较高，但 MAE 不如 0.30 |
-| `0.15` | `..._fbaux_w015.yaml` | 9.50° | 0.6187 | 0.9009 | 14.97° | 35.73 | 69.30% | 82.87% | 验证集最优，但 test 泛化最差 |
-| `0.20` | `..._fbaux_w020.yaml` | 10.27° | 0.6487 | **0.9229** | 13.71° | 35.11 | **74.94%** | 86.10% | Top-3 更高，但 MAE 不如 0.30 |
-| **`0.30`** | `..._fbaux_only.yaml` | **9.09°** | 0.6489 | 0.8832 | **11.97°** | **31.51** | 74.21% | **86.93%** | 旧 coherence 条件下最佳设置 |
-
-这轮 sweep 的结论是：
-
-- 小权重更容易抬高 `accuracy / top-3`
-- 但 `MAE` 和长尾误差仍然由 `0.30` 更占优
-- 当前文档主线已经转到 `cohfix + no-csl`，这组 sweep 主要作为历史对照保留
-
-## 外部 baseline：Moving-Binaural-SDEL 适配结果
-
-为了和 `Moving-Binaural-SDEL` 的核心结构做公平比较，项目里实现了两条适配 baseline：
-
-- `SDEL-DOA-Reg`
-  - 输入：`MBMS proxy + ILD + cos(IPD) + sin(IPD)`
-  - 输出：二维单位向量回归
-- `SDEL-DOA-Cls`
-  - 输入同上
-  - 输出：72 类分类
-
-### 结果对比
-
-| 模型 | 输出形式 | Accuracy | Top-3 | MAE | Median | FB err | Opp err | Large err |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| 当前主线 `cohfix + no-csl + fbaux_only` | 72类分类 | 0.6661 | 0.9317 | 11.92° | 2.50° | 0.0967 | 0.0089 | 0.0667 |
-| `DOA-Net pure-reg + fbaux` | 纯回归 | 0.4457 | 0.8370 | 11.01° | 2.40° | 0.0816 | 0.0063 | 0.0578 |
-| `SDEL-DOA-Reg` | 向量回归 | 0.4112 | 0.8651 | **7.42°** | **2.25°** | **0.0428** | **0.0022** | **0.0316** |
-| `SDEL-DOA-Cls` | 72类分类 | **0.6910** | **0.9558** | 12.77° | 2.50° | 0.0704 | 0.0118 | 0.0620 |
-| **`SDEL-DOA-Cls + fbaux`** | 72类分类 | **0.7201** | **0.9727** | **9.02°** | 2.50° | **0.0422** | 0.0053 | **0.0381** |
-| `DOA-Net mainline + reg` | 分类+角度回归 | 0.6640 | 0.9360 | 12.40° | 3.54° | 0.0892 | 0.0057 | 0.0679 |
-
-这组结果说明：
-
-- `SDEL` 风格 CRNN 主干本身很强，但它只是外部对照，不是本文档主线
-- 回归目标非常有利于降低 `MAE` 和前后大错
-- `fbaux` 在外部 backbone 上同样显著有效，说明它具有较好的 backbone-agnostic 特性
-- 在原生 DOA-Net backbone 上：
-  - 多任务分类+回归没有明显优于分类主线
-  - 纯回归则能稳定降低 `MAE` 和 `front/back` 相关错误
-- `SDEL-DOA-Cls + fbaux` 说明 `fbaux` 对外部 backbone 也有效
-- 当前最值得继续验证的是：
-  - `SDEL-DOA-Reg + fbaux`
-  - `SDEL backbone + 分类/回归联合任务`
-
-## 当前主线模型结构
-
-### 流程
+主模型链路：
 
 ```text
 立体声 WAV
   -> STFT 特征提取
   -> (log_mag_L, log_mag_R, IPD, ILD, sin/cos(IPD), coherence)
-  -> 左右耳共享编码器
-  -> IPD / ILD 投影
-  -> 差异先验 d_feat
-  -> 双向交叉注意力 + attention bias
-  -> 独立残差门控
-  -> 融合特征序列
-  -> BiGRU + attention pooling
-  -> 72类 DOA 分类头
-  -> front/back 辅助头
+  -> 共享编码器 / 或 native_lite_v7 内容流
+  -> 双耳交互与时序建模
+  -> DOA 分类 / 回归头
+  -> 可选 front/back 辅助头
 ```
 
-### 当前主线关键点
+关键实现文件：
 
-1. `attention bias`
-   - 用差异先验显式调制双向交叉注意力
-2. `独立残差门控`
-   - 左右两个方向分别学习 gate
-3. `attention pooling`
-   - 替代简单 mean pooling
-4. `enhanced binaural features`
-   - 使用 `sin/cos(IPD)` 与修正后的 `coherence`
-5. `front/back auxiliary`
-   - 显式学习前后半平面
-6. `no-csl`
-   - 当前主线关闭 `circular soft label`
+- 特征：
+  - `dataset/feature_extractor.py`
+  - `dataset/static_dataset.py`
+- 原生主线：
+  - `models/binaural_doa_net.py`
+  - `models/encoder.py`
+  - `models/difference_prior.py`
+  - `models/cross_attention.py`
+  - `models/gating.py`
+  - `models/temporal_head.py`
+- 轻量支线：
+  - `models/native_lite_v7.py`
+- 外部 baseline：
+  - `models/sdel_crnn_baseline.py`
+- 训练与评估：
+  - `train.py`
+  - `evaluate.py`
+  - `engine/trainer.py`
+  - `engine/evaluator.py`
+  - `losses.py`
+  - `metrics.py`
 
-相关实现：
+## EncoderV2 结构
 
-- `dataset/feature_extractor.py`
-- `models/encoder.py`
-- `models/difference_prior.py`
-- `models/cross_attention.py`
-- `models/gating.py`
-- `models/temporal_head.py`
-- `models/binaural_doa_net.py`
-- `losses.py`
+当前轻量 `v7` 推荐配置使用的是：
 
-## 当前数据与配置
+- `models/encoder.py` 中的 `BinauralEncoderV2Balanced`
+- 对应配置：
+  - `configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml`
 
-### 当前主用数据集
+它的设计目标不是单纯“多堆几层卷积”，而是让前端在沿频率轴压缩之前，先完成一轮更充分的局部时频建模，从而提升抗噪和抗混响能力，同时保持轻量。
 
-- `data/librispeech_cipic_multisubject_robust50h_v1`
+### 输入输出
 
-### 当前主用配置
+- 输入：
+  - 单耳内容谱图 `x ∈ [B, 1, T, F]`
+  - 左右耳共用同一个 encoder 实例（共享权重）
+- 输出：
+  - 单耳时序特征 `h ∈ [B, T, D]`
+  - 默认 `D = 96`
 
-- baseline：
-  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml`
-- enhanced：
-  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml`
-- 当前推荐主线：
-  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml`
-- baseline 对照：
-  - `configs/train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml`
-  - `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml`
-  - `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml`
-  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml`
-  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml`
+在 `native_lite_v7` 中：
 
-### 主线配置变化
+- 左耳 `log_mag_L` 经过 encoder 得到 `F_L`
+- 右耳 `log_mag_R` 经过同一个 encoder 得到 `F_R`
+- 再与 `ILD / sin(IPD) / cos(IPD) / coherence` 形成的 cue stream 融合
 
-相对 `enhanced`，当前推荐主线的关键变化是：
+### 结构概览
 
-- `model.use_front_back_auxiliary: true`
-- `train.front_back_aux_weight: 0.3`
-- `train.front_back_focus_weight: 0.0`
-- `train.circular_soft_label_weight: 0.0`
+`EncoderV2Balanced` 默认通道配置为：
 
-也就是说它保留：
+- `encoder_channels = [24, 40, 64]`
+- `encoder_out_dim = 96`
 
-- enhanced binaural features
-- v5 attention bias / 独立残差门控 / attention pooling
-- front/back auxiliary head
-- label smoothing
+整体结构是：
 
-同时去掉：
+```text
+[Balanced Stage 1] 1   -> 24
+[Balanced Stage 2] 24  -> 40
+[Balanced Stage 3] 40  -> 64
+-> AdaptiveAvgPool2d((None, 1))
+-> Linear(64 -> 96)
+```
 
-- front/back axis sample weighting
-- circular soft label
+每个 `Balanced Stage` 都由两步组成：
+
+1. `pre_conv`
+   - `Conv2d(3x3, stride=(1,1), padding=1)`
+   - `BatchNorm2d`
+   - `ReLU`
+
+2. `downsample`
+   - `Depthwise Conv2d(3x3, stride=(1,2), padding=1, groups=C)`
+   - `Pointwise Conv2d(1x1)`
+   - `BatchNorm2d`
+   - `ReLU`
+   - `Dropout2d`
+
+也就是说，每个 stage 都遵循：
+
+```text
+先提局部特征 -> 再沿频率轴下采样
+```
+
+而不是旧版 encoder 那种：
+
+```text
+单层 stride=(1,2) 卷积直接边提特征边下采样
+```
+
+### 三个 stage 的具体写法
+
+默认 `v7 encoder v2 balanced` 的 3 个 stage 可以写成：
+
+```text
+Stage 1
+  Conv3x3, 1  -> 24, stride=(1,1)
+  DWConv3x3, 24 -> 24, stride=(1,2)
+  PWConv1x1, 24 -> 24
+
+Stage 2
+  Conv3x3, 24 -> 40, stride=(1,1)
+  DWConv3x3, 40 -> 40, stride=(1,2)
+  PWConv1x1, 40 -> 40
+
+Stage 3
+  Conv3x3, 40 -> 64, stride=(1,1)
+  DWConv3x3, 64 -> 64, stride=(1,2)
+  PWConv1x1, 64 -> 64
+
+Tail
+  AdaptiveAvgPool2d((None, 1))
+  Linear(64 -> 96)
+```
+
+性质上：
+
+- 时间维基本不压缩
+- 频率维每个 stage 压一半
+- depthwise separable 部分控制了参数量
+
+### 和旧版 encoder 的区别
+
+旧版 `BinauralEncoder` 是：
+
+```text
+[Conv3x3 stride=(1,2) + BN + ReLU + Dropout] x 3
+-> freq pool
+-> linear
+```
+
+新版 `BinauralEncoderV2Balanced` 是：
+
+```text
+[(Conv3x3 stride=1) + (DWConv3x3 stride=(1,2) + PWConv1x1)] x 3
+-> freq pool
+-> linear
+```
+
+区别主要有三点：
+
+1. 旧版是一层卷积直接下采样；新版先提特征、再下采样。
+2. 新版的下采样层用 depthwise separable conv，参数更省。
+3. 新版通道数更克制：`[24, 40, 64]`，不是 `v7` 旧版的 `[24, 48, 96]`。
+
+### 参数量与收益
+
+在当前 `native_lite_v7` 主线里：
+
+- 原始 `v7` 总参数量：`313,083`
+- `encoder v2 balanced` 总参数量：`297,667`
+
+也就是说，这次改动并不是“更重换更好”，而是：
+
+- 参数量略降
+- `F1 / MAE / Acc@5° / Acc@10°` 同时提升
+
+在 unseen-subject test 上，相比原始 `v7 native_lite`：
+
+- `F1`: `0.3570 -> 0.3856`
+- `MAE`: `14.45° -> 12.91°`
+- `Acc@5°`: `0.7298 -> 0.7526`
+- `Acc@10°`: `0.8441 -> 0.8550`
+
+### 为什么它更适合轻量鲁棒主线
+
+这版 encoder 更适合当前目标“轻量化 + 抗噪 + 抗混响”的原因是：
+
+- 它保留了 `native_lite_v7` 的轻量时序头和 cue stream 设计
+- 只在内容编码前端做增强，不破坏整体主线结构
+- 先做局部建模再压频率轴，更符合 noisy / reverberant 条件下的表征需求
+- 用 depthwise separable conv 控制新增复杂度
+
+如果后续继续做轻量化实验，当前最自然的出发点就是这条线。
+
+## 当前保留的配置
+
+主线与强 baseline：
+
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml`
+- `configs/train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml`
+- `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml`
+
+历史对照与消融：
+
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_gru96.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_lite.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbfocus_only.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_nols_enhanced_fbaux_only_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_nols_enhanced_fbaux_only_cohfix.yaml`
+
+轻量 native 支线：
+
+- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_xattn_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_gru96_attnpool_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_gru96_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_gru96_xattn_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_xear_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_complexri_contentonly_nocsl_fbaux_cohfix.yaml`
+- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_complexri_phasecue_nocsl_fbaux_cohfix.yaml`
 
 ## 快速开始
 
-### 安装依赖
+安装依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 训练当前推荐主线
+训练当前原生主线：
 
 ```bash
 python train.py \
   --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml
 ```
 
-### 评估当前推荐主线
+训练当前轻量 `v7` 主线：
+
+```bash
+python train.py \
+  --config configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml
+```
+
+评估当前原生主线：
 
 ```bash
 python evaluate.py \
   --checkpoint outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix/best.pth \
   --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml \
-  --output.log_dir outputs/logs_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix_test_best
+  --output.log_dir outputs/logs_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix_test_best_workers4
 ```
 
-### 训练 SDEL baseline
-
-回归版：
-
-```bash
-python train.py \
-  --config configs/train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml
-```
-
-分类版：
-
-```bash
-python train.py \
-  --config configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml
-```
-
-分类版 + `fbaux`：
+训练 SDEL baseline：
 
 ```bash
 python train.py \
   --config configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml
 ```
 
-### 训练 DOA-Net 回归主线
+训练原生联合回归：
 
 ```bash
 python train.py \
   --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml
 ```
 
-### 训练 DOA-Net 纯回归主线
+训练原生纯回归：
 
 ```bash
 python train.py \
   --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml
 ```
+
+## 可用工具
+
+当前仍保留的训练/实验工具：
+
+- `tools/run_training_tmux.sh`
+- `tools/run_training_background.sh`
+- `tools/run_fbaux_weight_sweep.sh`
+- `tools/run_fbaux_weight_sweep_sequential.sh`
+- `tools/run_cohfix_softlabel_ablation_sequential.sh`
+- `tools/run_binmov2023_static_compare.sh`
+- `tools/monitor_training.sh`
+- `tools/diagnostics/analyze_multisubject_checkpoint.py`
 
 ## 项目结构
 
@@ -338,59 +402,16 @@ DOA-net/
 ├── metrics.py
 ├── prepare_robust_multisubject_dataset.py
 ├── configs/
-│   ├── default.yaml
-│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml
-│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml
-│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml
-│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only_cohfix.yaml
-│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml  ★
-│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml
-│   ├── train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml
-│   ├── train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml
-│   ├── train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml
-│   └── train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml
 ├── dataset/
 ├── engine/
 ├── models/
+├── tools/
 ├── utils/
-├── data/
 └── outputs/
 ```
 
-## 当前推荐结果
+## 备注
 
-最后更新：`2026-04-29`
-
-当前推荐 best（原生 DOA-Net 主线）：
-
-- checkpoint：
-  - `outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix/best.pth`
-- config：
-  - `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml`
-
-关键指标：
-
-- Accuracy: `0.6661`
-- Top-3 Accuracy: `0.9317`
-- MAE: `11.92°`
-- Median Error: `2.50°`
-- Error < 10°: `87.20%`
-- Front/back error rate: `0.0967`
-- Opposite error rate: `0.0089`
-
-当前外部 strongest classification baseline：
-
-- checkpoint：
-  - `outputs/checkpoints_multisubject_robust50h_sdel_doa_cls_fbaux_nw8_gpu1/best.pth`
-- config：
-  - `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml`
-
-关键指标：
-
-- Accuracy: `0.7201`
-- Top-3 Accuracy: `0.9727`
-- MAE: `9.02°`
-- Front/back error rate: `0.0422`
-- Opposite error rate: `0.0053`
-
-当前文档只保留 `v2-v5` 的阶段性结果记录，不再展开 `subject_003` 单 subject 分析与早期消融细节。若需回看历史实验，可直接查阅 `outputs/` 下对应日志目录。
+- 当前工作树已经清理掉大部分 `subject003` 历史文件和对应输出。
+- README 只描述当前仍保留在仓库中的配置、脚本和结果目录。
+- 若后续继续精简 `configs/` 或 `outputs/`，建议同步更新这里的“当前保留的配置”部分。

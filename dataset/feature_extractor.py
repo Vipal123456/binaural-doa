@@ -1,10 +1,12 @@
 """双耳（立体声）音频的特征提取。
 
-提取四种基础时频表示：
+提取基础时频表示：
   1. 左耳对数幅度谱
   2. 右耳对数幅度谱
-  3. IPD（双耳相位差）
-  4. ILD（双耳级差）
+  3. 左耳复谱实部 / 虚部
+  4. 右耳复谱实部 / 虚部
+  5. IPD（双耳相位差）
+  6. ILD（双耳级差）
 
 并额外提供增强双耳特征：
     5. sin(IPD)
@@ -72,11 +74,15 @@ class FeatureExtractor:
 
             * ``"log_mag_L"``  — ``[T, F]``  左耳对数幅度谱
             * ``"log_mag_R"``  — ``[T, F]``  右耳对数幅度谱
-            * ``"ipd"``        — ``[T, F]``  双耳相位差
-            * ``"ild"``        — ``[T, F]``  双耳级差（dB）
-            * ``"ipd_sin"``    — ``[T, F]``  IPD 的正弦表示
-            * ``"ipd_cos"``    — ``[T, F]``  IPD 的余弦表示
-            * ``"coherence"``  — ``[T, F]``  双耳相干性
+            * ``"spec_real_L"`` — ``[T, F]`` 左耳复谱实部
+            * ``"spec_imag_L"`` — ``[T, F]`` 左耳复谱虚部
+            * ``"spec_real_R"`` — ``[T, F]`` 右耳复谱实部
+            * ``"spec_imag_R"`` — ``[T, F]`` 右耳复谱虚部
+            * ``"ipd"``         — ``[T, F]`` 双耳相位差
+            * ``"ild"``         — ``[T, F]`` 双耳级差（dB）
+            * ``"ipd_sin"``     — ``[T, F]`` IPD 的正弦表示
+            * ``"ipd_cos"``     — ``[T, F]`` IPD 的余弦表示
+            * ``"coherence"``   — ``[T, F]`` 双耳相干性
         """
         assert audio.ndim == 2 and audio.shape[0] == 2, \
             f"Expected audio shape [2, N], got {audio.shape}"
@@ -89,6 +95,11 @@ class FeatureExtractor:
 
         mag_L = spec_L.abs()  # [F, T]
         mag_R = spec_R.abs()  # [F, T]
+
+        spec_real_L = spec_L.real.transpose(0, 1)  # [T, F]
+        spec_imag_L = spec_L.imag.transpose(0, 1)  # [T, F]
+        spec_real_R = spec_R.real.transpose(0, 1)  # [T, F]
+        spec_imag_R = spec_R.imag.transpose(0, 1)  # [T, F]
 
         # 对数幅度（加 eps 以保证数值稳定性）
         eps = 1e-8
@@ -115,6 +126,10 @@ class FeatureExtractor:
         return {
             "log_mag_L": log_mag_L,   # [T, F]
             "log_mag_R": log_mag_R,   # [T, F]
+            "spec_real_L": spec_real_L,  # [T, F]
+            "spec_imag_L": spec_imag_L,  # [T, F]
+            "spec_real_R": spec_real_R,  # [T, F]
+            "spec_imag_R": spec_imag_R,  # [T, F]
             "ipd": ipd,               # [T, F]
             "ild": ild,               # [T, F]
             "ipd_sin": ipd_sin,       # [T, F]

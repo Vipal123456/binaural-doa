@@ -1,16 +1,16 @@
-"""静态双耳DOA数据集加载器。
+"""静态双耳 DOA 数据集加载器。
 
-用于加载格式为:
-- binaural_dev/binaural{XXXX}.wav: 双耳音频文件 (24kHz, 2通道, 10秒)
-- metadata_dev/metadata{XXXX}.csv: 元数据文件 (帧号, x, y, z, 0, 0, 0, 0)
-
-方位角从笛卡尔坐标 (x, y) 计算: azimuth = atan2(x, y) * 180 / pi
+支持两类协议：
+1. 目录内直接做随机 train/val/test 比例划分
+2. BinMov2023 / SDEL 风格的固定 5-fold 文件划分（由 ``rnd_files.npy`` 指定）
 """
 
 import os
 import glob
 import warnings
 import math
+import pickle
+from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any
 
@@ -83,6 +83,15 @@ class StaticDOADataset(Dataset):
         white_noise_snr_db: float = 10.0,
         white_noise_prob: float = 1.0,
         white_noise_splits: Optional[List[str]] = None,
+        audio_subdir: str = "binaural_dev",
+        metadata_subdir: str = "metadata_dev",
+        split_strategy: str = "ratio",
+        split_folds: Optional[List[int]] = None,
+        rnd_files_path: Optional[str] = None,
+        azimuth_coordinate_order: str = "xy",
+        segment_hop_seconds: Optional[float] = None,
+        max_segments_per_recording: Optional[int] = None,
+        logger: Optional[Any] = None,
     ):
         self.root_dir = root_dir
         self.target_sr = sample_rate
@@ -97,6 +106,17 @@ class StaticDOADataset(Dataset):
         self.white_noise_snr_db = float(white_noise_snr_db)
         self.white_noise_prob = float(white_noise_prob)
         self.white_noise_splits = set(white_noise_splits or ["train"])
+        self.audio_subdir = audio_subdir
+        self.metadata_subdir = metadata_subdir
+        self.split_strategy = split_strategy
+        self.split_folds = sorted(int(f) for f in split_folds) if split_folds else None
+        self.rnd_files_path = rnd_files_path
+        self.azimuth_coordinate_order = azimuth_coordinate_order
+        self.segment_hop_seconds = float(segment_hop_seconds) if segment_hop_seconds is not None else self.segment_seconds
+        self.max_segments_per_recording = (
+            int(max_segments_per_recording) if max_segments_per_recording is not None else None
+        )
+        self.logger = logger
 
         # 计算方位角分辨率
         self.az_min, self.az_max = azimuth_range
@@ -110,22 +130,87 @@ class StaticDOADataset(Dataset):
             window=window,
         )
 
-        # 扫描数据集
-        self.recordings = self._scan_recordings()
-
-        # 划分数据集
-        self.recordings = self._split_recordings()
-
-        # 构建片段索引
+        self.recordings: List[StaticRecording] = []
         self.segments: List[Dict[str, Any]] = []
-        self._build_segments()
+        if not self._try_load_cache():
+            self.recordings = self._scan_recordings()
+            self.recordings = self._split_recordings()
+            self._build_segments()
+            self._save_cache()
+
+    def _cache_path(self) -> str:
+        try:
+            cache_dir = os.path.join(self.root_dir, ".doa_cache")
+            os.makedirs(cache_dir, exist_ok=True)
+        except OSError:
+            safe_root = os.path.join(
+                os.getcwd(),
+                "outputs",
+                "dataset_cache",
+                Path(self.root_dir).name,
+            )
+            os.makedirs(safe_root, exist_ok=True)
+            cache_dir = safe_root
+        seg_ms = int(round(self.segment_seconds * 1000.0))
+        az_min, az_max = self.azimuth_range
+        filename = (
+            f"{self.split}_sr{self.target_sr}_seg{seg_ms}ms_"
+            f"cls{self.num_classes}_az{az_min}_{az_max}_seed{self.split_seed}.pkl"
+        )
+        if self.split_strategy != "ratio":
+            strategy_tag = self.split_strategy
+            if self.split_folds:
+                strategy_tag += "_f" + "-".join(str(f) for f in self.split_folds)
+            hop_ms = int(round(self.segment_hop_seconds * 1000.0))
+            filename = filename.replace(".pkl", f"_{strategy_tag}_hop{hop_ms}ms.pkl")
+        return os.path.join(cache_dir, filename)
+
+    def _log(self, message: str) -> None:
+        if self.logger is not None:
+            self.logger.info(message)
+
+    def _try_load_cache(self) -> bool:
+        cache_path = self._cache_path()
+        if not os.path.isfile(cache_path):
+            return False
+        try:
+            with open(cache_path, "rb") as f:
+                payload = pickle.load(f)
+            self.recordings = [
+                StaticRecording(**rec_dict) for rec_dict in payload["recordings"]
+            ]
+            self.segments = payload["segments"]
+            self._log(
+                f"[{self.split}] 从缓存载入数据索引: "
+                f"{len(self.recordings)} recordings / {len(self.segments)} segments"
+            )
+            return True
+        except Exception as exc:
+            warnings.warn(f"Failed to load cache {cache_path}: {exc}")
+            return False
+
+    def _save_cache(self) -> None:
+        cache_path = self._cache_path()
+        payload = {
+            "recordings": [rec.__dict__ for rec in self.recordings],
+            "segments": self.segments,
+        }
+        try:
+            with open(cache_path, "wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+            self._log(
+                f"[{self.split}] 数据索引缓存已保存: "
+                f"{len(self.recordings)} recordings / {len(self.segments)} segments"
+            )
+        except Exception as exc:
+            warnings.warn(f"Failed to save cache {cache_path}: {exc}")
 
     def _scan_recordings(self) -> List[StaticRecording]:
         """扫描数据集目录，找到所有音频-元数据对。"""
         recordings = []
 
-        audio_dir = os.path.join(self.root_dir, "binaural_dev")
-        metadata_dir = os.path.join(self.root_dir, "metadata_dev")
+        audio_dir = os.path.join(self.root_dir, self.audio_subdir)
+        metadata_dir = os.path.join(self.root_dir, self.metadata_subdir)
 
         if not os.path.isdir(audio_dir):
             raise ValueError(f"Audio directory not found: {audio_dir}")
@@ -135,8 +220,9 @@ class StaticDOADataset(Dataset):
         # 查找所有音频文件
         audio_pattern = os.path.join(audio_dir, "binaural*.wav")
         audio_files = sorted(glob.glob(audio_pattern))
+        self._log(f"[{self.split}] 扫描音频目录: {audio_dir} ({len(audio_files)} files)")
 
-        for audio_path in audio_files:
+        for idx, audio_path in enumerate(audio_files, start=1):
             # 提取文件ID (e.g., "0001" from "binaural0001.wav")
             basename = os.path.basename(audio_path)
             file_id = basename.replace("binaural", "").replace(".wav", "")
@@ -152,13 +238,44 @@ class StaticDOADataset(Dataset):
             else:
                 warnings.warn(f"Metadata not found for {audio_path}")
 
+            if idx % 500 == 0 or idx == len(audio_files):
+                self._log(f"[{self.split}] 已扫描 {idx}/{len(audio_files)} 个文件")
+
         return recordings
+
+    def _recording_fold(self, file_id: str) -> Optional[int]:
+        if not self.rnd_files_path:
+            return None
+        rnd = np.load(self.rnd_files_path)
+        fil_nb = int(file_id)
+        for fold_idx in range(5):
+            start = fold_idx * 500
+            end = start + 500
+            if fil_nb in rnd[start:end]:
+                return fold_idx + 1
+        return None
 
     def _split_recordings(self) -> List[StaticRecording]:
         """按比例划分数据集。"""
         n = len(self.recordings)
         if n == 0:
             return []
+
+        if self.split_strategy == "binmov_fold":
+            if not self.split_folds:
+                raise ValueError("split_strategy='binmov_fold' requires split_folds")
+            if not self.rnd_files_path or not os.path.isfile(self.rnd_files_path):
+                raise ValueError("Valid rnd_files_path is required for binmov_fold split")
+            selected = []
+            for rec in self.recordings:
+                fold = self._recording_fold(rec.file_id)
+                if fold in self.split_folds:
+                    selected.append(rec)
+            self._log(
+                f"[{self.split}] fold 过滤后保留 {len(selected)}/{n} recordings "
+                f"(folds={self.split_folds})"
+            )
+            return selected
 
         # 固定随机种子进行划分
         rng = np.random.default_rng(self.split_seed)
@@ -180,9 +297,10 @@ class StaticDOADataset(Dataset):
 
     def _build_segments(self) -> None:
         """将录音切分为固定长度的片段。"""
-        segment_samples = int(self.segment_seconds * self.target_sr)
+        total = len(self.recordings)
+        self._log(f"[{self.split}] 开始构建片段索引: {total} recordings")
 
-        for rec in self.recordings:
+        for idx, rec in enumerate(self.recordings, start=1):
             # 获取音频时长
             duration_sec = self._get_audio_duration_sec(rec.audio_path)
             if duration_sec is None:
@@ -199,12 +317,14 @@ class StaticDOADataset(Dataset):
             azimuth_label = self._azimuth_to_label(azimuth_deg)
 
             # 计算片段数量
-            num_segments = int(duration_sec // self.segment_seconds)
+            num_segments = int((duration_sec - self.segment_seconds) // self.segment_hop_seconds) + 1
+            if self.max_segments_per_recording is not None:
+                num_segments = min(num_segments, self.max_segments_per_recording)
             if num_segments == 0:
                 continue
 
             for seg_idx in range(num_segments):
-                start_sec = seg_idx * self.segment_seconds
+                start_sec = seg_idx * self.segment_hop_seconds
                 self.segments.append({
                     "audio_path": rec.audio_path,
                     "start_sec": start_sec,
@@ -212,6 +332,12 @@ class StaticDOADataset(Dataset):
                     "azimuth_deg": azimuth_deg,
                     "azimuth_label": azimuth_label,
                 })
+
+            if idx % 250 == 0 or idx == total:
+                self._log(
+                    f"[{self.split}] 已完成 {idx}/{total} recordings, "
+                    f"累计 {len(self.segments)} segments"
+                )
 
     @staticmethod
     def _get_audio_duration_sec(path: str) -> Optional[float]:
@@ -232,8 +358,10 @@ class StaticDOADataset(Dataset):
     def _read_azimuth(self, metadata_path: str) -> Optional[float]:
         """从元数据文件读取方位角。
 
-        CSV格式: 帧号, x, y, z, 0, 0, 0, 0
-        方位角 = atan2(x, y) * 180 / pi
+        CSV格式: 帧号, x, y, z, ...
+        方位角支持两种约定：
+        - ``xy``: atan2(x, y) * 180 / pi  （项目原始约定）
+        - ``yx``: atan2(y, x) * 180 / pi  （BinMov2023 / SDEL 约定）
         """
         try:
             data = np.loadtxt(metadata_path, delimiter=",")
@@ -245,8 +373,10 @@ class StaticDOADataset(Dataset):
             x = data[mid_idx, 1]
             y = data[mid_idx, 2]
 
-            # 计算方位角
-            azimuth_rad = np.arctan2(x, y)
+            if self.azimuth_coordinate_order == "yx":
+                azimuth_rad = np.arctan2(y, x)
+            else:
+                azimuth_rad = np.arctan2(x, y)
             azimuth_deg = np.degrees(azimuth_rad)
 
             return float(azimuth_deg)
@@ -323,6 +453,10 @@ class StaticDOADataset(Dataset):
         return {
             "log_mag_L": feats["log_mag_L"],   # [T, F]
             "log_mag_R": feats["log_mag_R"],   # [T, F]
+            "spec_real_L": feats["spec_real_L"],  # [T, F]
+            "spec_imag_L": feats["spec_imag_L"],  # [T, F]
+            "spec_real_R": feats["spec_real_R"],  # [T, F]
+            "spec_imag_R": feats["spec_imag_R"],  # [T, F]
             "ipd": feats["ipd"],               # [T, F]
             "ild": feats["ild"],               # [T, F]
             "ipd_sin": feats["ipd_sin"],       # [T, F]
@@ -403,7 +537,7 @@ class StaticDOADataset(Dataset):
         return np.zeros((2, segment_samples), dtype=np.float32)
 
 
-def build_static_datasets(cfg) -> Tuple[Dataset, Dataset, Dataset]:
+def build_static_datasets(cfg, logger=None) -> Tuple[Dataset, Dataset, Dataset]:
     """根据配置构建训练、验证、测试数据集。
 
     参数
@@ -425,9 +559,9 @@ def build_static_datasets(cfg) -> Tuple[Dataset, Dataset, Dataset]:
         segment_seconds=ds_cfg.segment_seconds,
         num_classes=model_cfg.num_classes,
         azimuth_range=tuple(model_cfg.azimuth_range),
-        train_ratio=ds_cfg.train_ratio,
-        val_ratio=ds_cfg.val_ratio,
-        split_seed=ds_cfg.split_seed,
+        train_ratio=ds_cfg.get("train_ratio", 0.7),
+        val_ratio=ds_cfg.get("val_ratio", 0.15),
+        split_seed=ds_cfg.get("split_seed", 42),
         n_fft=feat_cfg.n_fft,
         hop_length=feat_cfg.hop_length,
         win_length=feat_cfg.win_length,
@@ -436,13 +570,37 @@ def build_static_datasets(cfg) -> Tuple[Dataset, Dataset, Dataset]:
         white_noise_snr_db=ds_cfg.get("white_noise_snr_db", 10.0),
         white_noise_prob=ds_cfg.get("white_noise_prob", 1.0),
         white_noise_splits=ds_cfg.get("white_noise_splits", ["train"]),
+        audio_subdir=ds_cfg.get("audio_subdir", "binaural_dev"),
+        metadata_subdir=ds_cfg.get("metadata_subdir", "metadata_dev"),
+        split_strategy=ds_cfg.get("split_strategy", "ratio"),
+        rnd_files_path=ds_cfg.get("rnd_files_path", None),
+        azimuth_coordinate_order=ds_cfg.get("azimuth_coordinate_order", "xy"),
+        segment_hop_seconds=ds_cfg.get("segment_hop_seconds", None),
+        max_segments_per_recording=ds_cfg.get("max_segments_per_recording", None),
+        logger=logger,
     )
 
     train_root = ds_cfg.get("train_root", None)
     val_root = ds_cfg.get("val_root", None)
     test_root = ds_cfg.get("test_root", None)
 
-    if train_root and val_root and test_root:
+    if ds_cfg.get("split_strategy", "ratio") == "binmov_fold":
+        train_ds = StaticDOADataset(
+            split="train",
+            split_folds=ds_cfg.get("train_folds", []),
+            **common_kwargs,
+        )
+        val_ds = StaticDOADataset(
+            split="val",
+            split_folds=ds_cfg.get("val_folds", []),
+            **common_kwargs,
+        )
+        test_ds = StaticDOADataset(
+            split="test",
+            split_folds=ds_cfg.get("test_folds", []),
+            **common_kwargs,
+        )
+    elif train_root and val_root and test_root:
         train_ds = StaticDOADataset(split="all", **{**common_kwargs, "root_dir": train_root})
         val_ds = StaticDOADataset(split="all", **{**common_kwargs, "root_dir": val_root})
         test_ds = StaticDOADataset(split="all", **{**common_kwargs, "root_dir": test_root})

@@ -15,19 +15,15 @@ class DOAMetrics:
         方位角分箱数量。
     azimuth_range : tuple
         方位角范围 ``(min, max)``，单位为度。
-    top_k : int
-        Top-k 准确率中的 k 值。
     """
 
     def __init__(
         self,
         num_classes: int = 72,
         azimuth_range: Tuple[float, float] = (-180.0, 180.0),
-        top_k: int = 3,
     ):
         self.num_classes = num_classes
         self.azimuth_range = azimuth_range
-        self.top_k = top_k
         self.reset()
 
     def reset(self) -> None:
@@ -93,14 +89,14 @@ class DOAMetrics:
         """对累积数据计算所有指标。
 
         返回:
-            包含 ``"accuracy"``、``"top_k_accuracy"``、
+            包含 ``"accuracy"``、``"f1_score"``、
             ``"mean_angular_error"`` 等键的字典。
         """
         # 处理空验证集的情况
         if len(self._pred_bins) == 0:
             return {
                 "accuracy": 0.0,
-                "top_k_accuracy": 0.0,
+                "f1_score": 0.0,
                 "mean_angular_error": float("inf"),
                 "median_angular_error": float("inf"),
             }
@@ -145,16 +141,10 @@ class DOAMetrics:
 
         results["macro_precision"] = float(precision_per_class.mean())
         results["macro_recall"] = float(recall_per_class.mean())
-        results["macro_f1"] = float(f1_per_class.mean())
+        # 宏平均 F1-score，适合观察 72 个角度类别上的整体均衡性。
+        results["f1_score"] = float(f1_per_class.mean())
 
-        # --- 2. Top-k 准确率 ---
-        top_k_preds = np.argsort(logits, axis=-1)[:, -self.top_k:]  # [N, k]
-        top_k_hit = np.array([
-            true_bins[i] in top_k_preds[i] for i in range(N)
-        ])
-        results["top_k_accuracy"] = float(top_k_hit.sum()) / max(N, 1)
-
-        # --- 3. 平均角度误差 ---
+        # --- 2. 平均角度误差 ---
         # 分类bin预测角度
         cls_pred_degs = bins_to_angles(pred_bins, self.num_classes, self.azimuth_range)
 
@@ -192,23 +182,24 @@ class DOAMetrics:
         results["std_angular_error"] = float(ang_err.std())
         results["max_angular_error"] = float(ang_err.max())
 
-        # --- 4. 误差分布统计 ---
-        results["error_lt_5"] = float((ang_err < 5).sum()) / max(N, 1)
-        results["error_lt_10"] = float((ang_err < 10).sum()) / max(N, 1)
-        results["error_lt_20"] = float((ang_err < 20).sum()) / max(N, 1)
-        results["error_lt_30"] = float((ang_err < 30).sum()) / max(N, 1)
+        # --- 3. 误差分布统计 ---
+        # 容忍度准确率：允许预测角度与真值相差不超过给定阈值。
+        results["acc_at_5deg"] = float((ang_err <= 5.0).sum()) / max(N, 1)
+        results["acc_at_10deg"] = float((ang_err <= 10.0).sum()) / max(N, 1)
+        results["acc_at_20deg"] = float((ang_err <= 20.0).sum()) / max(N, 1)
+        results["acc_at_30deg"] = float((ang_err <= 30.0).sum()) / max(N, 1)
 
-        # --- 4.1 诊断性错误统计 ---
+        # --- 3.1 诊断性错误统计 ---
         pred_fb = self._front_back_labels(pred_degs)
         true_fb = self._front_back_labels(true_degs)
-        results["front_back_error_rate"] = float((pred_fb != true_fb).sum()) / max(N, 1)
+        results["front_back_halfplane_error_rate"] = float((pred_fb != true_fb).sum()) / max(N, 1)
 
         circular_bin_diff = np.abs(pred_bins - true_bins)
         circular_bin_diff = np.minimum(circular_bin_diff, self.num_classes - circular_bin_diff)
         half_bins = self.num_classes // 2
 
         # near-bin: 落在真实bin及其相邻bin内（圆周意义下）
-        results["near_bin_error_rate"] = float((circular_bin_diff <= 1).sum()) / max(N, 1)
+        results["within_1bin_acc"] = float((circular_bin_diff <= 1).sum()) / max(N, 1)
 
         # opposite: 典型180°翻转，允许 ±1 bin 容差
         results["opposite_error_rate"] = float(
@@ -218,7 +209,7 @@ class DOAMetrics:
         # large error: 明显大错，默认定义为角误差 >= 45°
         results["large_error_rate"] = float((ang_err >= 45.0).sum()) / max(N, 1)
 
-        # --- 4.2 按空间区域统计 MAE ---
+        # --- 3.2 按空间区域统计 MAE ---
         region_labels = self._region_labels(true_degs)
         for region_name in ("front", "back", "side"):
             mask = region_labels == region_name
@@ -227,7 +218,7 @@ class DOAMetrics:
             else:
                 results[f"{region_name}_mae"] = float("nan")
 
-        # --- 5. 混合预测统计 ---
+        # --- 4. 混合预测统计 ---
         if len(self._pred_degs) > 0:
             results["regression_usage_ratio"] = float(regression_ratio)
 
