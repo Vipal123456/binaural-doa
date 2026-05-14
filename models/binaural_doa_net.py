@@ -29,7 +29,11 @@ from models.difference_prior import IPDILDProjection, DifferencePrior
 from models.cross_attention import BidirectionalCrossAttention
 from models.gating import GatingModule
 from models.temporal_head import TemporalHead
-from models.native_lite_v7 import NativeLiteDOANet
+from models.native_lite_v7 import (
+    NativeLiteDOANet,
+    NativeLiteCueConcatDOANet,
+    NativeLiteLiteCueConcatDOANet,
+)
 from models.sdel_crnn_baseline import SDELCRNNBaseline
 
 
@@ -365,6 +369,56 @@ def build_model(cfg):
             cue_bands=getattr(m, "cue_bands", 32),
             cue_hidden_dim=getattr(m, "cue_hidden_dim", 64),
             fusion_dim=getattr(m, "fusion_dim", 160),
+            gru_hidden_size=m.gru_hidden_size,
+            gru_num_layers=m.gru_num_layers,
+            gru_dropout=m.gru_dropout,
+            num_classes=m.num_classes,
+            azimuth_range=tuple(m.azimuth_range),
+            dropout=m.dropout,
+            use_attention_pooling=getattr(m, "use_attention_pooling", True),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", True),
+            use_regression=getattr(m, "use_regression", False),
+            use_pure_regression=getattr(m, "use_pure_regression", False),
+        )
+
+    if model_type == "native_lite_v7_cue_concat":
+        return NativeLiteCueConcatDOANet(
+            freq_bins=freq_bins,
+            encoder_channels=getattr(m, "encoder_channels", [24, 40, 64]),
+            encoder_out_dim=getattr(m, "encoder_out_dim", 96),
+            encoder_variant=getattr(m, "encoder_variant", "v2_balanced"),
+            content_input_mode=getattr(m, "content_input_mode", "logmag"),
+            cue_feature_mode=getattr(m, "cue_feature_mode", "ild_phase"),
+            cue_encoder_channels=getattr(m, "cue_encoder_channels", [8, 16, 24]),
+            cue_encoder_out_dim=getattr(m, "cue_encoder_out_dim", 32),
+            content_fusion_dim=getattr(m, "content_fusion_dim", 96),
+            use_cross_ear_interaction=getattr(m, "use_cross_ear_interaction", False),
+            gru_hidden_size=m.gru_hidden_size,
+            gru_num_layers=m.gru_num_layers,
+            gru_dropout=m.gru_dropout,
+            num_classes=m.num_classes,
+            azimuth_range=tuple(m.azimuth_range),
+            dropout=m.dropout,
+            use_attention_pooling=getattr(m, "use_attention_pooling", True),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", True),
+            use_regression=getattr(m, "use_regression", False),
+            use_pure_regression=getattr(m, "use_pure_regression", False),
+        )
+
+    if model_type == "native_lite_v7_lite_cue_concat":
+        return NativeLiteLiteCueConcatDOANet(
+            freq_bins=freq_bins,
+            encoder_channels=getattr(m, "encoder_channels", [24, 40, 64]),
+            encoder_out_dim=getattr(m, "encoder_out_dim", 96),
+            encoder_variant=getattr(m, "encoder_variant", "v2_balanced"),
+            content_input_mode=getattr(m, "content_input_mode", "logmag"),
+            cue_feature_mode=getattr(m, "cue_feature_mode", "ild_phase"),
+            content_fusion_dim=getattr(m, "content_fusion_dim", 96),
+            lite_cue_bands=getattr(m, "lite_cue_bands", 16),
+            lite_cue_hidden_dim=getattr(m, "lite_cue_hidden_dim", 48),
+            cue_encoder_out_dim=getattr(m, "cue_encoder_out_dim", 32),
+            lite_cue_kernel_size=getattr(m, "lite_cue_kernel_size", 3),
+            use_cross_ear_interaction=getattr(m, "use_cross_ear_interaction", False),
             gru_hidden_size=m.gru_hidden_size,
             gru_num_layers=m.gru_num_layers,
             gru_dropout=m.gru_dropout,

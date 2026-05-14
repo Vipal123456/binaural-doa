@@ -34,6 +34,45 @@ from models.encoder import BinauralEncoder, BinauralEncoderV2Balanced
 from models.temporal_head import TemporalHead
 
 
+class LiteCueEncoder(nn.Module):
+    """轻量 cue encoder：先做频带压缩，再做时间维 1D 卷积。"""
+
+    def __init__(
+        self,
+        in_channels: int,
+        cue_bands: int = 16,
+        temporal_hidden_dim: int = 48,
+        out_dim: int = 32,
+        kernel_size: int = 3,
+        dropout: float = 0.2,
+    ):
+        super().__init__()
+        self.cue_bands = cue_bands
+        flat_dim = in_channels * cue_bands
+        padding = kernel_size // 2
+
+        self.temporal_net = nn.Sequential(
+            nn.Conv1d(flat_dim, temporal_hidden_dim, kernel_size=kernel_size, padding=padding),
+            nn.BatchNorm1d(temporal_hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Conv1d(temporal_hidden_dim, out_dim, kernel_size=kernel_size, padding=padding),
+            nn.BatchNorm1d(out_dim),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, cue_tensor: torch.Tensor) -> torch.Tensor:
+        # cue_tensor: [B, C, T, F]
+        bsz, num_cues, time_steps, freq_bins = cue_tensor.shape
+        x = cue_tensor.reshape(bsz * num_cues * time_steps, 1, freq_bins)
+        x = F.adaptive_avg_pool1d(x, self.cue_bands)
+        x = x.reshape(bsz, num_cues, time_steps, self.cue_bands)
+        x = x.permute(0, 2, 1, 3).reshape(bsz, time_steps, num_cues * self.cue_bands)
+        x = x.transpose(1, 2)  # [B, C*bands, T]
+        x = self.temporal_net(x)
+        return x.transpose(1, 2)  # [B, T, out_dim]
+
+
 class NativeLiteDOANet(nn.Module):
     """内容流 + 双耳线索流 + 低维融合 的轻量 native DOA 模型。"""
 
@@ -232,4 +271,372 @@ class NativeLiteDOANet(nn.Module):
         if cue_feat is not None:
             outputs["cue_feat"] = cue_feat
         outputs["fused_feat"] = fused
+        return outputs
+
+
+class NativeLiteCueConcatDOANet(nn.Module):
+    """内容流保持不变，cue 流单独编码，再拼接送入 GRU 的轻量 native 模型。"""
+
+    def __init__(
+        self,
+        freq_bins: int = 257,
+        encoder_channels=None,
+        encoder_out_dim: int = 96,
+        encoder_variant: str = "v2_balanced",
+        content_input_mode: str = "logmag",
+        cue_feature_mode: str = "ild_phase",
+        cue_encoder_channels=None,
+        cue_encoder_out_dim: int = 32,
+        content_fusion_dim: int = 96,
+        use_cross_ear_interaction: bool = False,
+        gru_hidden_size: int = 96,
+        gru_num_layers: int = 1,
+        gru_dropout: float = 0.1,
+        num_classes: int = 72,
+        azimuth_range=(-180.0, 180.0),
+        dropout: float = 0.2,
+        use_attention_pooling: bool = True,
+        use_front_back_auxiliary: bool = True,
+        use_regression: bool = False,
+        use_pure_regression: bool = False,
+    ):
+        super().__init__()
+        if encoder_channels is None:
+            encoder_channels = [24, 40, 64]
+        if cue_encoder_channels is None:
+            cue_encoder_channels = [8, 16, 24]
+
+        if content_input_mode not in {"logmag", "complex_ri"}:
+            raise ValueError(f"Unsupported content_input_mode: {content_input_mode}")
+        if cue_feature_mode not in {"all", "phase_only", "ild_phase"}:
+            raise ValueError(f"Unsupported cue_feature_mode: {cue_feature_mode}")
+
+        self.content_input_mode = content_input_mode
+        self.cue_feature_mode = cue_feature_mode
+        self.use_cross_ear_interaction = use_cross_ear_interaction
+
+        content_in_channels = 1 if content_input_mode == "logmag" else 2
+        if encoder_variant == "v1":
+            encoder_cls = BinauralEncoder
+        elif encoder_variant == "v2_balanced":
+            encoder_cls = BinauralEncoderV2Balanced
+        else:
+            raise ValueError(f"Unsupported encoder_variant: {encoder_variant}")
+
+        self.encoder = encoder_cls(
+            in_channels=content_in_channels,
+            channels=encoder_channels,
+            out_dim=encoder_out_dim,
+            dropout=dropout,
+        )
+
+        if cue_feature_mode == "all":
+            cue_in_channels = 4
+        elif cue_feature_mode == "phase_only":
+            cue_in_channels = 2
+        else:
+            cue_in_channels = 3
+
+        self.cue_encoder = BinauralEncoderV2Balanced(
+            in_channels=cue_in_channels,
+            channels=cue_encoder_channels,
+            out_dim=cue_encoder_out_dim,
+            dropout=dropout,
+        )
+
+        self.content_fusion = nn.Sequential(
+            nn.Linear(encoder_out_dim * 3, content_fusion_dim),
+            nn.LayerNorm(content_fusion_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+
+        if self.use_cross_ear_interaction:
+            self.cross_rl = nn.Linear(encoder_out_dim, encoder_out_dim)
+            self.cross_lr = nn.Linear(encoder_out_dim, encoder_out_dim)
+            self.cross_norm_l = nn.LayerNorm(encoder_out_dim)
+            self.cross_norm_r = nn.LayerNorm(encoder_out_dim)
+        else:
+            self.cross_rl = None
+            self.cross_lr = None
+            self.cross_norm_l = None
+            self.cross_norm_r = None
+
+        temporal_input_dim = content_fusion_dim + cue_encoder_out_dim
+        self.fusion_norm = nn.LayerNorm(temporal_input_dim)
+        self.fusion_dropout = nn.Dropout(dropout)
+
+        self.temporal_head = TemporalHead(
+            input_dim=temporal_input_dim,
+            gru_hidden_size=gru_hidden_size,
+            gru_num_layers=gru_num_layers,
+            num_classes=num_classes,
+            gru_dropout=gru_dropout,
+            dropout=dropout,
+            use_regression=use_regression,
+            use_pure_regression=use_pure_regression,
+            use_attention_pooling=use_attention_pooling,
+            use_front_back_auxiliary=use_front_back_auxiliary,
+            azimuth_range=tuple(azimuth_range),
+        )
+
+    def _build_cue_tensor(
+        self,
+        ild: torch.Tensor,
+        ipd_sin: torch.Tensor,
+        ipd_cos: torch.Tensor,
+        coherence: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.cue_feature_mode == "phase_only":
+            return torch.stack([ipd_sin, ipd_cos], dim=1)
+        if self.cue_feature_mode == "ild_phase":
+            return torch.stack([ild, ipd_sin, ipd_cos], dim=1)
+        return torch.stack([ild, ipd_sin, ipd_cos, coherence], dim=1)
+
+    def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        log_mag_L = batch["log_mag_L"]
+        log_mag_R = batch["log_mag_R"]
+        ild = batch["ild"]
+        ipd = batch["ipd"]
+
+        if self.content_input_mode == "logmag":
+            left_content = log_mag_L.unsqueeze(1)
+            right_content = log_mag_R.unsqueeze(1)
+        else:
+            left_content = torch.stack([batch["spec_real_L"], batch["spec_imag_L"]], dim=1)
+            right_content = torch.stack([batch["spec_real_R"], batch["spec_imag_R"]], dim=1)
+
+        f_l = self.encoder(left_content)
+        f_r = self.encoder(right_content)
+
+        if self.use_cross_ear_interaction:
+            cross_l = self.cross_norm_l(self.cross_rl(f_r))
+            cross_r = self.cross_norm_r(self.cross_lr(f_l))
+            f_l = f_l + cross_l
+            f_r = f_r + cross_r
+
+        t_enc = f_l.shape[1]
+        ild = ild[:, :t_enc, :]
+
+        ipd_sin = batch.get("ipd_sin")
+        ipd_cos = batch.get("ipd_cos")
+        coherence = batch.get("coherence")
+
+        if ipd_sin is None:
+            ipd_sin = torch.sin(ipd[:, :t_enc, :])
+        else:
+            ipd_sin = ipd_sin[:, :t_enc, :]
+
+        if ipd_cos is None:
+            ipd_cos = torch.cos(ipd[:, :t_enc, :])
+        else:
+            ipd_cos = ipd_cos[:, :t_enc, :]
+
+        if coherence is None:
+            coherence = torch.ones_like(ild)
+        else:
+            coherence = coherence[:, :t_enc, :]
+
+        mean_feat = 0.5 * (f_l + f_r)
+        diff_feat = f_l - f_r
+        abs_diff_feat = diff_feat.abs()
+        content_feat = torch.cat([mean_feat, diff_feat, abs_diff_feat], dim=-1)
+        content_feat = self.content_fusion(content_feat)
+
+        cue_tensor = self._build_cue_tensor(ild, ipd_sin, ipd_cos, coherence)
+        cue_feat = self.cue_encoder(cue_tensor)
+
+        fused = torch.cat([content_feat, cue_feat], dim=-1)
+        fused = self.fusion_norm(fused)
+        fused = self.fusion_dropout(fused)
+
+        outputs = self.temporal_head(fused)
+        outputs["cue_feat"] = cue_feat
+        outputs["fused_feat"] = fused
+        outputs["content_feat"] = content_feat
+        return outputs
+
+
+class NativeLiteLiteCueConcatDOANet(nn.Module):
+    """内容流保留 encoder v2，cue 流改为轻量 band-pool + temporal conv。"""
+
+    def __init__(
+        self,
+        freq_bins: int = 257,
+        encoder_channels=None,
+        encoder_out_dim: int = 96,
+        encoder_variant: str = "v2_balanced",
+        content_input_mode: str = "logmag",
+        cue_feature_mode: str = "ild_phase",
+        content_fusion_dim: int = 96,
+        lite_cue_bands: int = 16,
+        lite_cue_hidden_dim: int = 48,
+        cue_encoder_out_dim: int = 32,
+        lite_cue_kernel_size: int = 3,
+        use_cross_ear_interaction: bool = False,
+        gru_hidden_size: int = 96,
+        gru_num_layers: int = 1,
+        gru_dropout: float = 0.1,
+        num_classes: int = 72,
+        azimuth_range=(-180.0, 180.0),
+        dropout: float = 0.2,
+        use_attention_pooling: bool = True,
+        use_front_back_auxiliary: bool = True,
+        use_regression: bool = False,
+        use_pure_regression: bool = False,
+    ):
+        super().__init__()
+        if encoder_channels is None:
+            encoder_channels = [24, 40, 64]
+
+        if content_input_mode not in {"logmag", "complex_ri"}:
+            raise ValueError(f"Unsupported content_input_mode: {content_input_mode}")
+        if cue_feature_mode not in {"all", "phase_only", "ild_phase"}:
+            raise ValueError(f"Unsupported cue_feature_mode: {cue_feature_mode}")
+
+        self.content_input_mode = content_input_mode
+        self.cue_feature_mode = cue_feature_mode
+        self.use_cross_ear_interaction = use_cross_ear_interaction
+
+        content_in_channels = 1 if content_input_mode == "logmag" else 2
+        if encoder_variant == "v1":
+            encoder_cls = BinauralEncoder
+        elif encoder_variant == "v2_balanced":
+            encoder_cls = BinauralEncoderV2Balanced
+        else:
+            raise ValueError(f"Unsupported encoder_variant: {encoder_variant}")
+
+        self.encoder = encoder_cls(
+            in_channels=content_in_channels,
+            channels=encoder_channels,
+            out_dim=encoder_out_dim,
+            dropout=dropout,
+        )
+
+        if cue_feature_mode == "all":
+            cue_in_channels = 4
+        elif cue_feature_mode == "phase_only":
+            cue_in_channels = 2
+        else:
+            cue_in_channels = 3
+
+        self.cue_encoder = LiteCueEncoder(
+            in_channels=cue_in_channels,
+            cue_bands=lite_cue_bands,
+            temporal_hidden_dim=lite_cue_hidden_dim,
+            out_dim=cue_encoder_out_dim,
+            kernel_size=lite_cue_kernel_size,
+            dropout=dropout,
+        )
+
+        self.content_fusion = nn.Sequential(
+            nn.Linear(encoder_out_dim * 3, content_fusion_dim),
+            nn.LayerNorm(content_fusion_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+
+        if self.use_cross_ear_interaction:
+            self.cross_rl = nn.Linear(encoder_out_dim, encoder_out_dim)
+            self.cross_lr = nn.Linear(encoder_out_dim, encoder_out_dim)
+            self.cross_norm_l = nn.LayerNorm(encoder_out_dim)
+            self.cross_norm_r = nn.LayerNorm(encoder_out_dim)
+        else:
+            self.cross_rl = None
+            self.cross_lr = None
+            self.cross_norm_l = None
+            self.cross_norm_r = None
+
+        temporal_input_dim = content_fusion_dim + cue_encoder_out_dim
+        self.fusion_norm = nn.LayerNorm(temporal_input_dim)
+        self.fusion_dropout = nn.Dropout(dropout)
+
+        self.temporal_head = TemporalHead(
+            input_dim=temporal_input_dim,
+            gru_hidden_size=gru_hidden_size,
+            gru_num_layers=gru_num_layers,
+            num_classes=num_classes,
+            gru_dropout=gru_dropout,
+            dropout=dropout,
+            use_regression=use_regression,
+            use_pure_regression=use_pure_regression,
+            use_attention_pooling=use_attention_pooling,
+            use_front_back_auxiliary=use_front_back_auxiliary,
+            azimuth_range=tuple(azimuth_range),
+        )
+
+    def _build_cue_tensor(
+        self,
+        ild: torch.Tensor,
+        ipd_sin: torch.Tensor,
+        ipd_cos: torch.Tensor,
+        coherence: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.cue_feature_mode == "phase_only":
+            return torch.stack([ipd_sin, ipd_cos], dim=1)
+        if self.cue_feature_mode == "ild_phase":
+            return torch.stack([ild, ipd_sin, ipd_cos], dim=1)
+        return torch.stack([ild, ipd_sin, ipd_cos, coherence], dim=1)
+
+    def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        log_mag_L = batch["log_mag_L"]
+        log_mag_R = batch["log_mag_R"]
+        ild = batch["ild"]
+        ipd = batch["ipd"]
+
+        if self.content_input_mode == "logmag":
+            left_content = log_mag_L.unsqueeze(1)
+            right_content = log_mag_R.unsqueeze(1)
+        else:
+            left_content = torch.stack([batch["spec_real_L"], batch["spec_imag_L"]], dim=1)
+            right_content = torch.stack([batch["spec_real_R"], batch["spec_imag_R"]], dim=1)
+
+        f_l = self.encoder(left_content)
+        f_r = self.encoder(right_content)
+
+        if self.use_cross_ear_interaction:
+            cross_l = self.cross_norm_l(self.cross_rl(f_r))
+            cross_r = self.cross_norm_r(self.cross_lr(f_l))
+            f_l = f_l + cross_l
+            f_r = f_r + cross_r
+
+        t_enc = f_l.shape[1]
+        ild = ild[:, :t_enc, :]
+
+        ipd_sin = batch.get("ipd_sin")
+        ipd_cos = batch.get("ipd_cos")
+        coherence = batch.get("coherence")
+
+        if ipd_sin is None:
+            ipd_sin = torch.sin(ipd[:, :t_enc, :])
+        else:
+            ipd_sin = ipd_sin[:, :t_enc, :]
+
+        if ipd_cos is None:
+            ipd_cos = torch.cos(ipd[:, :t_enc, :])
+        else:
+            ipd_cos = ipd_cos[:, :t_enc, :]
+
+        if coherence is None:
+            coherence = torch.ones_like(ild)
+        else:
+            coherence = coherence[:, :t_enc, :]
+
+        mean_feat = 0.5 * (f_l + f_r)
+        diff_feat = f_l - f_r
+        abs_diff_feat = diff_feat.abs()
+        content_feat = torch.cat([mean_feat, diff_feat, abs_diff_feat], dim=-1)
+        content_feat = self.content_fusion(content_feat)
+
+        cue_tensor = self._build_cue_tensor(ild, ipd_sin, ipd_cos, coherence)
+        cue_feat = self.cue_encoder(cue_tensor)
+
+        fused = torch.cat([content_feat, cue_feat], dim=-1)
+        fused = self.fusion_norm(fused)
+        fused = self.fusion_dropout(fused)
+
+        outputs = self.temporal_head(fused)
+        outputs["cue_feat"] = cue_feat
+        outputs["fused_feat"] = fused
+        outputs["content_feat"] = content_feat
         return outputs

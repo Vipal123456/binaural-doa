@@ -37,18 +37,31 @@
 - test log：
   - `outputs/logs_multisubject_robust50h_sdel_doa_cls_fbaux_nw8_gpu1_test_best_workers8/train.log`
 
-当前推荐的轻量 native `v7` 主线：
+当前推荐的轻量 native `v7` 结果分成两条：
 
-- 配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml`
-- checkpoint：
-  - `outputs/checkpoints_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix/best.pth`
-- test 结果：
-  - `accuracy = 0.6644`
-  - `f1_score = 0.3856`
-  - `mean_angular_error = 12.91°`
-  - `acc_at_5deg = 0.7526`
-  - `acc_at_10deg = 0.8550`
+- `MAE` 更优的轻量主线：
+  - 配置：
+    - `configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml`
+  - checkpoint：
+    - `outputs/checkpoints_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix/best.pth`
+  - test 结果：
+    - `accuracy = 0.6644`
+    - `f1_score = 0.3856`
+    - `mean_angular_error = 12.91°`
+    - `acc_at_5deg = 0.7526`
+    - `acc_at_10deg = 0.8550`
+
+- `Acc / F1 / Acc@5° / Acc@10°` 更优的轻量 cue 独立流主线：
+  - 配置：
+    - `configs/train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_nocsl_fbaux_cohfix.yaml`
+  - checkpoint：
+    - `outputs/checkpoints_multisubject_robust50h_v7_litecueenc_concat_all_nocsl_fbaux_cohfix/best.pth`
+  - test 结果：
+    - `accuracy = 0.7133`
+    - `f1_score = 0.4264`
+    - `mean_angular_error = 13.89°`
+    - `acc_at_5deg = 0.7800`
+    - `acc_at_10deg = 0.8656`
 
 ## 数据集
 
@@ -78,6 +91,7 @@
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 原生主线 `v5 + enhanced + fbaux_only + cohfix + no-csl` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml` | 0.6661 | 0.3828 | 11.92° | 0.7429 | 0.8720 | 0.0967 | 0.0089 | 0.0667 |
 | 轻量主线 `v7 + encoder v2 balanced + fbaux` | `train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml` | 0.6644 | 0.3856 | 12.91° | 0.7526 | 0.8550 | 0.0916 | 0.0064 | 0.0731 |
+| 轻量 cue 主线 `v7 + lite cue encoder all + fbaux` | `train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_nocsl_fbaux_cohfix.yaml` | 0.7133 | 0.4264 | 13.89° | 0.7800 | 0.8656 | 0.1078 | 0.0088 | 0.0821 |
 | `DOA-Net pure-reg + fbaux` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml` | 0.4457 | 0.3196 | 11.01° | 0.7438 | 0.8834 | 0.0816 | 0.0063 | 0.0578 |
 | `DOA-Net cls + reg + fbaux` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml` | 0.6640 | 0.3772 | 12.40° | 0.7380 | 0.8609 | 0.0892 | 0.0057 | 0.0679 |
 | `SDEL-DOA-Reg` | `train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml` | 0.4112 | 0.3202 | **7.42°** | 0.7780 | 0.9246 | 0.0428 | 0.0022 | 0.0316 |
@@ -90,7 +104,9 @@
 - `coherence` 修正后，原生主线在 unseen-subject test 上更稳。
 - 在原生 backbone 上：
   - `no-csl + fbaux_only + cohfix` 是当前最均衡的分类主线。
-  - `v7 + encoder v2 balanced` 是当前更推荐的轻量 native 版本；相比原始 `v7 native_lite`，`F1 / MAE / Acc@5° / Acc@10°` 全部提升。
+  - `v7 + encoder v2 balanced` 是当前更推荐的轻量 `MAE` 主线；相比原始 `v7 native_lite`，`F1 / MAE / Acc@5° / Acc@10°` 全部提升。
+  - `v7 + lite cue encoder all` 是当前更强的轻量分类主线；`Accuracy / F1 / Acc@5° / Acc@10°` 全部高于 `encoder v2 balanced`，但 `MAE` 更差，且 `front/back` 与 `large error` 更高。
+  - 在轻量 cue 独立流上，`coherence` 不是冗余项；去掉 `coherence` 的 `ild_phase` 版本没有超过 `encoder v2 balanced`。
   - 纯回归进一步降低 `MAE` 和结构性大错，但分类指标明显下降。
   - 分类 + 回归联合没有超过当前原生分类主线。
 - 在外部 backbone 上：
@@ -257,6 +273,93 @@ Tail
 1. 旧版是一层卷积直接下采样；新版先提特征、再下采样。
 2. 新版的下采样层用 depthwise separable conv，参数更省。
 3. 新版通道数更克制：`[24, 40, 64]`，不是 `v7` 旧版的 `[24, 48, 96]`。
+
+## LiteCueEncoder-A 结构
+
+当前轻量 cue 独立流主线使用的是：
+
+- `models/native_lite_v7.py` 中的 `NativeLiteLiteCueConcatDOANet`
+- 对应配置：
+  - `configs/train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_nocsl_fbaux_cohfix.yaml`
+
+它的目标不是复制一条完整的 2D cue-CNN，而是让 cue 流保留独立身份，同时把计算量控制在比较克制的范围内。
+
+### 核心思路
+
+```text
+内容流:
+  log_mag_L / log_mag_R
+  -> shared EncoderV2Balanced
+  -> mean / diff / absdiff
+  -> content_fusion(288 -> 96)
+
+cue 流:
+  [ILD, sin(IPD), cos(IPD), coherence]
+  -> band pooling (F -> 16)
+  -> temporal Conv1d
+  -> cue_feat(32)
+
+融合:
+  concat([content_feat(96), cue_feat(32)])
+  -> fused_feat(128)
+  -> BiGRU + attention pooling
+  -> classifier + front/back auxiliary head
+```
+
+### 为什么要单独做 LiteCueEncoder
+
+上一版完整 `cue encoder + concat` 在 `T x F` 大图上跑了额外 2D CNN，结果是：
+
+- 训练更慢
+- 参数更少但计算并不划算
+- 最终效果明显不如 `encoder v2 balanced`
+
+`LiteCueEncoder-A` 改成：
+
+- 先沿频率维做压缩
+- 再只在时间维做轻量 1D 卷积
+
+这样做的直觉是：
+
+- cue 本来就是高度结构化的空间线索
+- 不必复制一条重型内容 encoder
+- 先压缩频率维，再做局部时序提纯，更符合 cue 的信息性质
+
+### 参数量与计算量
+
+`encoder v2 balanced`：
+
+- 参数量：`297,667`
+- 参数存储（FP32）：`1.136 MB`
+- checkpoint 大小：约 `3.5 MB`
+- MACs：`1.315 G`
+- 估算 FLOPs：`2.631 G`
+
+`lite cue encoder all`：
+
+- 参数量：`251,795`
+- 参数存储（FP32）：`0.961 MB`
+- checkpoint 大小：约 `3.0 MB`
+- MACs：`1.306 G`
+- 估算 FLOPs：`2.612 G`
+
+### 和 `encoder v2 balanced` 的关系
+
+`encoder v2 balanced` 更像：
+
+- `MAE` 更优
+- `front/back` 和 `large error` 控制更稳
+
+`lite cue encoder all` 更像：
+
+- `Accuracy / F1 / Acc@5° / Acc@10°` 更强
+- 参数量更小
+- 但尾部大错更重，导致 `MAE` 没赢
+
+当前仓库里，这两条线的定位可以理解为：
+
+- `encoder v2 balanced`：轻量 `MAE` 主线
+- `lite cue encoder all`：轻量分类 / 近邻命中主线
 
 ### 参数量与收益
 
