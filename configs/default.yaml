@@ -46,12 +46,14 @@ model:
   content_input_mode: "logmag"
   use_cue_stream: true
   cue_feature_mode: "all"
+  content_relation_mode: "mean_diff_absdiff"
   cue_encoder_channels: [8, 16, 24]
   cue_encoder_out_dim: 32
   content_fusion_dim: 96
   lite_cue_bands: 16
   lite_cue_hidden_dim: 48
   lite_cue_kernel_size: 3
+  lite_cue_encoder_type: "temporal_conv"
   use_cross_ear_interaction: false
   cue_bands: 32
   cue_hidden_dim: 64

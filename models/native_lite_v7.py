@@ -45,21 +45,33 @@ class LiteCueEncoder(nn.Module):
         out_dim: int = 32,
         kernel_size: int = 3,
         dropout: float = 0.2,
+        encoder_type: str = "temporal_conv",
     ):
         super().__init__()
         self.cue_bands = cue_bands
+        self.encoder_type = encoder_type
         flat_dim = in_channels * cue_bands
-        padding = kernel_size // 2
-
-        self.temporal_net = nn.Sequential(
-            nn.Conv1d(flat_dim, temporal_hidden_dim, kernel_size=kernel_size, padding=padding),
-            nn.BatchNorm1d(temporal_hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Conv1d(temporal_hidden_dim, out_dim, kernel_size=kernel_size, padding=padding),
-            nn.BatchNorm1d(out_dim),
-            nn.ReLU(inplace=True),
-        )
+        if encoder_type == "temporal_conv":
+            padding = kernel_size // 2
+            self.temporal_net = nn.Sequential(
+                nn.Conv1d(flat_dim, temporal_hidden_dim, kernel_size=kernel_size, padding=padding),
+                nn.BatchNorm1d(temporal_hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout),
+                nn.Conv1d(temporal_hidden_dim, out_dim, kernel_size=kernel_size, padding=padding),
+                nn.BatchNorm1d(out_dim),
+                nn.ReLU(inplace=True),
+            )
+        elif encoder_type == "mlp":
+            self.temporal_net = nn.Sequential(
+                nn.Linear(flat_dim, temporal_hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout),
+                nn.Linear(temporal_hidden_dim, out_dim),
+                nn.ReLU(inplace=True),
+            )
+        else:
+            raise ValueError(f"Unsupported LiteCueEncoder encoder_type: {encoder_type}")
 
     def forward(self, cue_tensor: torch.Tensor) -> torch.Tensor:
         # cue_tensor: [B, C, T, F]
@@ -68,9 +80,11 @@ class LiteCueEncoder(nn.Module):
         x = F.adaptive_avg_pool1d(x, self.cue_bands)
         x = x.reshape(bsz, num_cues, time_steps, self.cue_bands)
         x = x.permute(0, 2, 1, 3).reshape(bsz, time_steps, num_cues * self.cue_bands)
-        x = x.transpose(1, 2)  # [B, C*bands, T]
-        x = self.temporal_net(x)
-        return x.transpose(1, 2)  # [B, T, out_dim]
+        if self.encoder_type == "temporal_conv":
+            x = x.transpose(1, 2)  # [B, C*bands, T]
+            x = self.temporal_net(x)
+            return x.transpose(1, 2)  # [B, T, out_dim]
+        return self.temporal_net(x)  # [B, T, out_dim]
 
 
 class NativeLiteDOANet(nn.Module):
@@ -468,11 +482,13 @@ class NativeLiteLiteCueConcatDOANet(nn.Module):
         encoder_variant: str = "v2_balanced",
         content_input_mode: str = "logmag",
         cue_feature_mode: str = "ild_phase",
+        content_relation_mode: str = "mean_diff_absdiff",
         content_fusion_dim: int = 96,
         lite_cue_bands: int = 16,
         lite_cue_hidden_dim: int = 48,
         cue_encoder_out_dim: int = 32,
         lite_cue_kernel_size: int = 3,
+        lite_cue_encoder_type: str = "temporal_conv",
         use_cross_ear_interaction: bool = False,
         gru_hidden_size: int = 96,
         gru_num_layers: int = 1,
@@ -493,9 +509,12 @@ class NativeLiteLiteCueConcatDOANet(nn.Module):
             raise ValueError(f"Unsupported content_input_mode: {content_input_mode}")
         if cue_feature_mode not in {"all", "phase_only", "ild_phase"}:
             raise ValueError(f"Unsupported cue_feature_mode: {cue_feature_mode}")
+        if content_relation_mode not in {"mean_diff_absdiff", "mean_diff", "diff_only"}:
+            raise ValueError(f"Unsupported content_relation_mode: {content_relation_mode}")
 
         self.content_input_mode = content_input_mode
         self.cue_feature_mode = cue_feature_mode
+        self.content_relation_mode = content_relation_mode
         self.use_cross_ear_interaction = use_cross_ear_interaction
 
         content_in_channels = 1 if content_input_mode == "logmag" else 2
@@ -527,10 +546,17 @@ class NativeLiteLiteCueConcatDOANet(nn.Module):
             out_dim=cue_encoder_out_dim,
             kernel_size=lite_cue_kernel_size,
             dropout=dropout,
+            encoder_type=lite_cue_encoder_type,
         )
 
+        if content_relation_mode == "mean_diff_absdiff":
+            content_relation_dim = encoder_out_dim * 3
+        elif content_relation_mode == "mean_diff":
+            content_relation_dim = encoder_out_dim * 2
+        else:
+            content_relation_dim = encoder_out_dim
         self.content_fusion = nn.Sequential(
-            nn.Linear(encoder_out_dim * 3, content_fusion_dim),
+            nn.Linear(content_relation_dim, content_fusion_dim),
             nn.LayerNorm(content_fusion_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
@@ -624,8 +650,13 @@ class NativeLiteLiteCueConcatDOANet(nn.Module):
 
         mean_feat = 0.5 * (f_l + f_r)
         diff_feat = f_l - f_r
-        abs_diff_feat = diff_feat.abs()
-        content_feat = torch.cat([mean_feat, diff_feat, abs_diff_feat], dim=-1)
+        if self.content_relation_mode == "mean_diff_absdiff":
+            abs_diff_feat = diff_feat.abs()
+            content_feat = torch.cat([mean_feat, diff_feat, abs_diff_feat], dim=-1)
+        elif self.content_relation_mode == "mean_diff":
+            content_feat = torch.cat([mean_feat, diff_feat], dim=-1)
+        else:
+            content_feat = diff_feat
         content_feat = self.content_fusion(content_feat)
 
         cue_tensor = self._build_cue_tensor(ild, ipd_sin, ipd_cos, coherence)
