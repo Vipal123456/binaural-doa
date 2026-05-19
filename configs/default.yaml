@@ -54,6 +54,9 @@ model:
   lite_cue_hidden_dim: 48
   lite_cue_kernel_size: 3
   lite_cue_encoder_type: "temporal_conv"
+  cue_value_out_dim: 24
+  cue_reliability_out_dim: 8
+  dual_cue_fusion_mode: "concat"
   use_cross_ear_interaction: false
   cue_bands: 32
   cue_hidden_dim: 64

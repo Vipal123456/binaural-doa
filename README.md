@@ -79,6 +79,21 @@
     - `acc_at_5deg = 0.7498`
     - `acc_at_10deg = 0.8625`
 
+- 当前更有方法叙事、且结果有竞争力的 dual-cue 主线：
+  - 配置：
+    - `configs/train_librispeech_multisubject_robust50h_v7_dualcue_vr_cf80_gru80_nocsl_fbaux_cohfix.yaml`
+  - checkpoint：
+    - `outputs/checkpoints_multisubject_robust50h_v7_dualcue_vr_cf80_gru80_nocsl_fbaux_cohfix/best.pth`
+  - 两次 seed 复验：
+    - `seed42: accuracy = 0.6892, f1_score = 0.4090, mean_angular_error = 12.17°, acc_at_5deg = 0.7616, acc_at_10deg = 0.8599`
+    - `seed43: accuracy = 0.6751, f1_score = 0.3919, mean_angular_error = 12.59°, acc_at_5deg = 0.7558, acc_at_10deg = 0.8587`
+  - 两次 seed 平均：
+    - `accuracy = 0.6822`
+    - `f1_score = 0.4005`
+    - `mean_angular_error = 12.38°`
+    - `acc_at_5deg = 0.7587`
+    - `acc_at_10deg = 0.8593`
+
 ## 数据集
 
 主用数据集根目录：
@@ -112,6 +127,9 @@
 | 轻量候选主线 `v7 + lite cue + cf80 + cue24 + gru80 (seed43)` | `train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_cf80_cue24_gru80_seed43_nocsl_fbaux_cohfix.yaml` | 0.7022 | 0.4062 | 12.90° | 0.7709 | 0.8731 | 0.0982 | 0.0106 | 0.0730 |
 | 轻量候选主线 `v7 + lite cue + cf80 + cue24 + gru80 (seed44)` | `train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_cf80_cue24_gru80_seed44_nocsl_fbaux_cohfix.yaml` | 0.6630 | 0.3805 | 12.75° | 0.7340 | 0.8571 | 0.0879 | 0.0068 | 0.0666 |
 | 轻量候选主线 `v7 + lite cue + cf80 + cue24 + gru80 (3-seed avg)` | `seed42 / seed43 / seed44` | 0.6772 | 0.3901 | 12.58° | 0.7498 | 0.8625 | 0.0896 | 0.0090 | 0.0698 |
+| 方法主线 `v7 + dual cue value/reliability + cf80 + gru80 (seed42)` | `train_librispeech_multisubject_robust50h_v7_dualcue_vr_cf80_gru80_nocsl_fbaux_cohfix.yaml` | 0.6892 | 0.4090 | 12.17° | 0.7616 | 0.8599 | 0.0867 | 0.0130 | 0.0612 |
+| 方法主线 `v7 + dual cue value/reliability + cf80 + gru80 (seed43)` | `train_librispeech_multisubject_robust50h_v7_dualcue_vr_cf80_gru80_seed43_nocsl_fbaux_cohfix.yaml` | 0.6751 | 0.3919 | 12.59° | 0.7558 | 0.8587 | 0.1024 | 0.0049 | 0.0767 |
+| 方法主线 `v7 + dual cue value/reliability + cf80 + gru80 (2-seed avg)` | `seed42 / seed43` | 0.6822 | 0.4005 | 12.38° | 0.7587 | 0.8593 | 0.0946 | 0.0090 | 0.0690 |
 | `DOA-Net pure-reg + fbaux` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml` | 0.4457 | 0.3196 | 11.01° | 0.7438 | 0.8834 | 0.0816 | 0.0063 | 0.0578 |
 | `DOA-Net cls + reg + fbaux` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml` | 0.6640 | 0.3772 | 12.40° | 0.7380 | 0.8609 | 0.0892 | 0.0057 | 0.0679 |
 | `SDEL-DOA-Reg` | `train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml` | 0.4112 | 0.3202 | **7.42°** | 0.7780 | 0.9246 | 0.0428 | 0.0022 | 0.0316 |
@@ -126,10 +144,12 @@
   - `no-csl + fbaux_only + cohfix` 是当前最均衡的分类主线。
   - `v7 + encoder v2 balanced` 是当前更推荐的轻量 `MAE` 主线；相比原始 `v7 native_lite`，`F1 / MAE / Acc@5° / Acc@10°` 全部提升。
   - `v7 + lite cue encoder all` 是当前更强的轻量分类主线；`Accuracy / F1 / Acc@5° / Acc@10°` 全部高于 `encoder v2 balanced`，但 `MAE` 更差，且 `front/back` 与 `large error` 更高。
-  - `v7 + lite cue + cf80 + cue24 + gru80` 是当前更均衡、最值得继续推进的轻量候选主线；它比 `encoder v2 balanced` 参数更少，并在三次 seed 下都保持了稳定、且有竞争力的 `Acc / F1 / MAE / Acc@10°`。
+  - `v7 + lite cue + cf80 + cue24 + gru80` 是当前更稳的轻量候选主线；它比 `encoder v2 balanced` 参数更少，并在三次 seed 下都保持了稳定、且有竞争力的 `Acc / F1 / MAE / Acc@10°`。
+  - `v7 + dual cue value/reliability + cf80 + gru80` 是当前更适合作为论文方法主线的版本；它把 `ILD/sin(IPD)/cos(IPD)` 和 `coherence` 显式拆成 value / reliability 两支，在两次 seed 平均下取得了与 `cf80_cue24_gru80` 同档、略优的综合结果。
   - 在轻量 cue 独立流上，`coherence` 不是冗余项；去掉 `coherence` 的 `ild_phase` 版本没有超过 `encoder v2 balanced`。
   - 在 lite cue 独立流上，`temporal conv` 不是冗余项；改成 `MLP-only` 会明显削弱分类表现。
   - `absdiff` 更偏向帮助分类锐度，而不是帮助 `MAE`；去掉后 `Acc / F1 / Acc@5° / Acc@10°` 会掉，但 `MAE` 和尾部错误会更保守。
+  - 多尺度 temporal cue encoder 与 band-weighting cue encoder 都没有稳定超过当前主线；前者收益有限，后者在 `MAE / Acc@5° / Acc@10° / front-back error` 上明显变差。
   - 纯回归进一步降低 `MAE` 和结构性大错，但分类指标明显下降。
   - 分类 + 回归联合没有超过当前原生分类主线。
 - 在外部 backbone 上：

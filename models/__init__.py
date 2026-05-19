@@ -5,5 +5,6 @@ from models.native_lite_v7 import (
     NativeLiteDOANet,
     NativeLiteCueConcatDOANet,
     NativeLiteLiteCueConcatDOANet,
+    NativeLiteDualCueConcatDOANet,
 )
 from models.sdel_crnn_baseline import SDELCRNNBaseline
