@@ -158,12 +158,26 @@ class DualBranchCueEncoder(nn.Module):
         dropout: float = 0.2,
         encoder_type: str = "temporal_conv",
         fusion_mode: str = "concat",
+        use_tf_mask: bool = False,
+        tf_mask_hidden_channels: int = 8,
+        tf_mask_residual_scale: float = 1.0,
     ):
         super().__init__()
         if fusion_mode not in {"concat", "gate"}:
             raise ValueError(f"Unsupported DualBranchCueEncoder fusion_mode: {fusion_mode}")
 
         self.fusion_mode = fusion_mode
+        self.use_tf_mask = use_tf_mask
+        self.tf_mask_residual_scale = tf_mask_residual_scale
+        if use_tf_mask:
+            self.tf_mask_net = nn.Sequential(
+                nn.Conv2d(4, tf_mask_hidden_channels, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(tf_mask_hidden_channels, 1, kernel_size=1),
+                nn.Sigmoid(),
+            )
+        else:
+            self.tf_mask_net = None
         self.value_encoder = LiteCueEncoder(
             in_channels=3,
             cue_bands=cue_bands,
@@ -208,6 +222,12 @@ class DualBranchCueEncoder(nn.Module):
         value_tensor: torch.Tensor,
         reliability_tensor: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
+        if self.use_tf_mask:
+            mask_input = torch.cat([value_tensor, reliability_tensor], dim=1)
+            tf_mask = self.tf_mask_net(mask_input)
+            value_tensor = value_tensor * (1.0 + self.tf_mask_residual_scale * tf_mask)
+        else:
+            tf_mask = None
         value_feat = self.value_encoder(value_tensor)
         reliability_feat = self.reliability_encoder(reliability_tensor)
         if self.fusion_mode == "gate":
@@ -221,6 +241,7 @@ class DualBranchCueEncoder(nn.Module):
             "cue_value_feat": value_feat,
             "cue_reliability_feat": reliability_feat,
             "cue_gate": gate,
+            "cue_tf_mask": tf_mask,
         }
 
 
@@ -242,6 +263,11 @@ class NativeLiteDOANet(nn.Module):
         fusion_dim: int = 160,
         gru_hidden_size: int = 96,
         gru_num_layers: int = 1,
+        temporal_encoder_type: str = "gru",
+        mamba_num_layers: int = 2,
+        mamba_state_dim: int = 16,
+        mamba_expand_factor: int = 2,
+        mamba_conv_kernel: int = 4,
         gru_dropout: float = 0.1,
         num_classes: int = 72,
         azimuth_range=(-180.0, 180.0),
@@ -321,6 +347,11 @@ class NativeLiteDOANet(nn.Module):
             input_dim=fusion_dim,
             gru_hidden_size=gru_hidden_size,
             gru_num_layers=gru_num_layers,
+            temporal_encoder_type=temporal_encoder_type,
+            mamba_num_layers=mamba_num_layers,
+            mamba_state_dim=mamba_state_dim,
+            mamba_expand_factor=mamba_expand_factor,
+            mamba_conv_kernel=mamba_conv_kernel,
             num_classes=num_classes,
             gru_dropout=gru_dropout,
             dropout=dropout,
@@ -442,6 +473,11 @@ class NativeLiteCueConcatDOANet(nn.Module):
         use_cross_ear_interaction: bool = False,
         gru_hidden_size: int = 96,
         gru_num_layers: int = 1,
+        temporal_encoder_type: str = "gru",
+        mamba_num_layers: int = 2,
+        mamba_state_dim: int = 16,
+        mamba_expand_factor: int = 2,
+        mamba_conv_kernel: int = 4,
         gru_dropout: float = 0.1,
         num_classes: int = 72,
         azimuth_range=(-180.0, 180.0),
@@ -521,6 +557,11 @@ class NativeLiteCueConcatDOANet(nn.Module):
             input_dim=temporal_input_dim,
             gru_hidden_size=gru_hidden_size,
             gru_num_layers=gru_num_layers,
+            temporal_encoder_type=temporal_encoder_type,
+            mamba_num_layers=mamba_num_layers,
+            mamba_state_dim=mamba_state_dim,
+            mamba_expand_factor=mamba_expand_factor,
+            mamba_conv_kernel=mamba_conv_kernel,
             num_classes=num_classes,
             gru_dropout=gru_dropout,
             dropout=dropout,
@@ -629,6 +670,11 @@ class NativeLiteLiteCueConcatDOANet(nn.Module):
         use_cross_ear_interaction: bool = False,
         gru_hidden_size: int = 96,
         gru_num_layers: int = 1,
+        temporal_encoder_type: str = "gru",
+        mamba_num_layers: int = 2,
+        mamba_state_dim: int = 16,
+        mamba_expand_factor: int = 2,
+        mamba_conv_kernel: int = 4,
         gru_dropout: float = 0.1,
         num_classes: int = 72,
         azimuth_range=(-180.0, 180.0),
@@ -718,6 +764,11 @@ class NativeLiteLiteCueConcatDOANet(nn.Module):
             input_dim=temporal_input_dim,
             gru_hidden_size=gru_hidden_size,
             gru_num_layers=gru_num_layers,
+            temporal_encoder_type=temporal_encoder_type,
+            mamba_num_layers=mamba_num_layers,
+            mamba_state_dim=mamba_state_dim,
+            mamba_expand_factor=mamba_expand_factor,
+            mamba_conv_kernel=mamba_conv_kernel,
             num_classes=num_classes,
             gru_dropout=gru_dropout,
             dropout=dropout,
@@ -829,9 +880,17 @@ class NativeLiteDualCueConcatDOANet(nn.Module):
         lite_cue_kernel_size: int = 3,
         lite_cue_encoder_type: str = "temporal_conv",
         dual_cue_fusion_mode: str = "concat",
+        dual_cue_use_tf_mask: bool = False,
+        dual_cue_tf_mask_hidden_channels: int = 8,
+        dual_cue_tf_mask_residual_scale: float = 1.0,
         use_cross_ear_interaction: bool = False,
         gru_hidden_size: int = 80,
         gru_num_layers: int = 1,
+        temporal_encoder_type: str = "gru",
+        mamba_num_layers: int = 2,
+        mamba_state_dim: int = 16,
+        mamba_expand_factor: int = 2,
+        mamba_conv_kernel: int = 4,
         gru_dropout: float = 0.1,
         num_classes: int = 72,
         azimuth_range=(-180.0, 180.0),
@@ -878,6 +937,9 @@ class NativeLiteDualCueConcatDOANet(nn.Module):
             dropout=dropout,
             encoder_type=lite_cue_encoder_type,
             fusion_mode=dual_cue_fusion_mode,
+            use_tf_mask=dual_cue_use_tf_mask,
+            tf_mask_hidden_channels=dual_cue_tf_mask_hidden_channels,
+            tf_mask_residual_scale=dual_cue_tf_mask_residual_scale,
         )
         cue_encoder_out_dim = cue_value_out_dim if dual_cue_fusion_mode == "gate" else cue_value_out_dim + cue_reliability_out_dim
 
@@ -913,6 +975,11 @@ class NativeLiteDualCueConcatDOANet(nn.Module):
             input_dim=temporal_input_dim,
             gru_hidden_size=gru_hidden_size,
             gru_num_layers=gru_num_layers,
+            temporal_encoder_type=temporal_encoder_type,
+            mamba_num_layers=mamba_num_layers,
+            mamba_state_dim=mamba_state_dim,
+            mamba_expand_factor=mamba_expand_factor,
+            mamba_conv_kernel=mamba_conv_kernel,
             num_classes=num_classes,
             gru_dropout=gru_dropout,
             dropout=dropout,
@@ -993,6 +1060,261 @@ class NativeLiteDualCueConcatDOANet(nn.Module):
         outputs["content_feat"] = content_feat
         outputs["cue_value_feat"] = cue_outputs["cue_value_feat"]
         outputs["cue_reliability_feat"] = cue_outputs["cue_reliability_feat"]
+        outputs["cue_tf_mask"] = cue_outputs["cue_tf_mask"]
         if cue_outputs["cue_gate"] is not None:
             outputs["cue_gate"] = cue_outputs["cue_gate"]
+        return outputs
+
+
+class NativeLiteContentOnlyDOANet(nn.Module):
+    """仅使用双耳内容流、不显式使用 ILD/IPD/coherence 的 baseline。"""
+
+    def __init__(
+        self,
+        freq_bins: int = 257,
+        encoder_channels=None,
+        encoder_out_dim: int = 96,
+        encoder_variant: str = "v2_balanced",
+        content_input_mode: str = "logmag",
+        content_relation_mode: str = "mean_diff_absdiff",
+        content_fusion_dim: int = 80,
+        use_cross_ear_interaction: bool = False,
+        gru_hidden_size: int = 80,
+        gru_num_layers: int = 1,
+        temporal_encoder_type: str = "gru",
+        mamba_num_layers: int = 2,
+        mamba_state_dim: int = 16,
+        mamba_expand_factor: int = 2,
+        mamba_conv_kernel: int = 4,
+        gru_dropout: float = 0.1,
+        num_classes: int = 72,
+        azimuth_range=(-180.0, 180.0),
+        dropout: float = 0.2,
+        use_attention_pooling: bool = True,
+        use_front_back_auxiliary: bool = True,
+        use_regression: bool = False,
+        use_pure_regression: bool = False,
+    ):
+        super().__init__()
+        if encoder_channels is None:
+            encoder_channels = [24, 40, 64]
+        if content_input_mode not in {"logmag", "complex_ri"}:
+            raise ValueError(f"Unsupported content_input_mode: {content_input_mode}")
+        if content_relation_mode not in {"mean_diff_absdiff", "mean_diff", "diff_only"}:
+            raise ValueError(f"Unsupported content_relation_mode: {content_relation_mode}")
+
+        self.content_input_mode = content_input_mode
+        self.content_relation_mode = content_relation_mode
+        self.use_cross_ear_interaction = use_cross_ear_interaction
+
+        content_in_channels = 1 if content_input_mode == "logmag" else 2
+        if encoder_variant == "v1":
+            encoder_cls = BinauralEncoder
+        elif encoder_variant == "v2_balanced":
+            encoder_cls = BinauralEncoderV2Balanced
+        else:
+            raise ValueError(f"Unsupported encoder_variant: {encoder_variant}")
+
+        self.encoder = encoder_cls(
+            in_channels=content_in_channels,
+            channels=encoder_channels,
+            out_dim=encoder_out_dim,
+            dropout=dropout,
+        )
+
+        if content_relation_mode == "mean_diff_absdiff":
+            content_relation_dim = encoder_out_dim * 3
+        elif content_relation_mode == "mean_diff":
+            content_relation_dim = encoder_out_dim * 2
+        else:
+            content_relation_dim = encoder_out_dim
+        self.content_fusion = nn.Sequential(
+            nn.Linear(content_relation_dim, content_fusion_dim),
+            nn.LayerNorm(content_fusion_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+
+        if self.use_cross_ear_interaction:
+            self.cross_rl = nn.Linear(encoder_out_dim, encoder_out_dim)
+            self.cross_lr = nn.Linear(encoder_out_dim, encoder_out_dim)
+            self.cross_norm_l = nn.LayerNorm(encoder_out_dim)
+            self.cross_norm_r = nn.LayerNorm(encoder_out_dim)
+        else:
+            self.cross_rl = None
+            self.cross_lr = None
+            self.cross_norm_l = None
+            self.cross_norm_r = None
+
+        self.fusion_norm = nn.LayerNorm(content_fusion_dim)
+        self.fusion_dropout = nn.Dropout(dropout)
+
+        self.temporal_head = TemporalHead(
+            input_dim=content_fusion_dim,
+            gru_hidden_size=gru_hidden_size,
+            gru_num_layers=gru_num_layers,
+            temporal_encoder_type=temporal_encoder_type,
+            mamba_num_layers=mamba_num_layers,
+            mamba_state_dim=mamba_state_dim,
+            mamba_expand_factor=mamba_expand_factor,
+            mamba_conv_kernel=mamba_conv_kernel,
+            num_classes=num_classes,
+            gru_dropout=gru_dropout,
+            dropout=dropout,
+            use_regression=use_regression,
+            use_pure_regression=use_pure_regression,
+            use_attention_pooling=use_attention_pooling,
+            use_front_back_auxiliary=use_front_back_auxiliary,
+            azimuth_range=tuple(azimuth_range),
+        )
+
+    def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        log_mag_L = batch["log_mag_L"]
+        log_mag_R = batch["log_mag_R"]
+
+        if self.content_input_mode == "logmag":
+            left_content = log_mag_L.unsqueeze(1)
+            right_content = log_mag_R.unsqueeze(1)
+        else:
+            left_content = torch.stack([batch["spec_real_L"], batch["spec_imag_L"]], dim=1)
+            right_content = torch.stack([batch["spec_real_R"], batch["spec_imag_R"]], dim=1)
+
+        f_l = self.encoder(left_content)
+        f_r = self.encoder(right_content)
+
+        if self.use_cross_ear_interaction:
+            cross_l = self.cross_norm_l(self.cross_rl(f_r))
+            cross_r = self.cross_norm_r(self.cross_lr(f_l))
+            f_l = f_l + cross_l
+            f_r = f_r + cross_r
+
+        mean_feat = 0.5 * (f_l + f_r)
+        diff_feat = f_l - f_r
+        if self.content_relation_mode == "mean_diff_absdiff":
+            abs_diff_feat = diff_feat.abs()
+            content_feat = torch.cat([mean_feat, diff_feat, abs_diff_feat], dim=-1)
+        elif self.content_relation_mode == "mean_diff":
+            content_feat = torch.cat([mean_feat, diff_feat], dim=-1)
+        else:
+            content_feat = diff_feat
+
+        content_feat = self.content_fusion(content_feat)
+        fused = self.fusion_norm(content_feat)
+        fused = self.fusion_dropout(fused)
+
+        outputs = self.temporal_head(fused)
+        outputs["content_feat"] = content_feat
+        outputs["fused_feat"] = fused
+        return outputs
+
+
+class NativeLiteEarlyFusionDOANet(nn.Module):
+    """单流早融合 baseline。
+
+    输入特征:
+      [mean log-magnitude, ILD, sin(IPD), cos(IPD), coherence]
+    先统一送入一个共享 encoder，再经轻量 bottleneck + BiGRU 做分类。
+    """
+
+    def __init__(
+        self,
+        freq_bins: int = 257,
+        encoder_channels=None,
+        encoder_out_dim: int = 96,
+        encoder_variant: str = "v2_balanced",
+        early_fusion_dim: int = 80,
+        gru_hidden_size: int = 80,
+        gru_num_layers: int = 1,
+        temporal_encoder_type: str = "gru",
+        mamba_num_layers: int = 2,
+        mamba_state_dim: int = 16,
+        mamba_expand_factor: int = 2,
+        mamba_conv_kernel: int = 4,
+        gru_dropout: float = 0.1,
+        num_classes: int = 72,
+        azimuth_range=(-180.0, 180.0),
+        dropout: float = 0.2,
+        use_attention_pooling: bool = True,
+        use_front_back_auxiliary: bool = True,
+        use_regression: bool = False,
+        use_pure_regression: bool = False,
+    ):
+        super().__init__()
+        if encoder_channels is None:
+            encoder_channels = [24, 40, 64]
+
+        if encoder_variant == "v1":
+            encoder_cls = BinauralEncoder
+        elif encoder_variant == "v2_balanced":
+            encoder_cls = BinauralEncoderV2Balanced
+        else:
+            raise ValueError(f"Unsupported encoder_variant: {encoder_variant}")
+
+        # early fusion stack: [mean_logmag, ild, sin(ipd), cos(ipd), coherence]
+        self.encoder = encoder_cls(
+            in_channels=5,
+            channels=encoder_channels,
+            out_dim=encoder_out_dim,
+            dropout=dropout,
+        )
+        self.fusion_proj = nn.Sequential(
+            nn.Linear(encoder_out_dim, early_fusion_dim),
+            nn.LayerNorm(early_fusion_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+        self.temporal_head = TemporalHead(
+            input_dim=early_fusion_dim,
+            gru_hidden_size=gru_hidden_size,
+            gru_num_layers=gru_num_layers,
+            temporal_encoder_type=temporal_encoder_type,
+            mamba_num_layers=mamba_num_layers,
+            mamba_state_dim=mamba_state_dim,
+            mamba_expand_factor=mamba_expand_factor,
+            mamba_conv_kernel=mamba_conv_kernel,
+            num_classes=num_classes,
+            gru_dropout=gru_dropout,
+            dropout=dropout,
+            use_regression=use_regression,
+            use_pure_regression=use_pure_regression,
+            use_attention_pooling=use_attention_pooling,
+            use_front_back_auxiliary=use_front_back_auxiliary,
+            azimuth_range=tuple(azimuth_range),
+        )
+
+    def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        log_mag_L = batch["log_mag_L"]
+        log_mag_R = batch["log_mag_R"]
+        ild = batch["ild"]
+        ipd = batch["ipd"]
+
+        t_ref = min(log_mag_L.shape[1], log_mag_R.shape[1], ild.shape[1], ipd.shape[1])
+        log_mag_L = log_mag_L[:, :t_ref, :]
+        log_mag_R = log_mag_R[:, :t_ref, :]
+        ild = ild[:, :t_ref, :]
+        ipd = ipd[:, :t_ref, :]
+
+        ipd_sin = batch.get("ipd_sin")
+        ipd_cos = batch.get("ipd_cos")
+        coherence = batch.get("coherence")
+
+        if ipd_sin is None:
+            ipd_sin = torch.sin(ipd)
+        else:
+            ipd_sin = ipd_sin[:, :t_ref, :]
+        if ipd_cos is None:
+            ipd_cos = torch.cos(ipd)
+        else:
+            ipd_cos = ipd_cos[:, :t_ref, :]
+        if coherence is None:
+            coherence = torch.ones_like(ild)
+        else:
+            coherence = coherence[:, :t_ref, :]
+
+        mean_logmag = 0.5 * (log_mag_L + log_mag_R)
+        x = torch.stack([mean_logmag, ild, ipd_sin, ipd_cos, coherence], dim=1)  # [B, 5, T, F]
+        fused_feat = self.encoder(x)
+        fused_feat = self.fusion_proj(fused_feat)
+        outputs = self.temporal_head(fused_feat)
+        outputs["fused_feat"] = fused_feat
         return outputs

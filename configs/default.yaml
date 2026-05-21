@@ -50,6 +50,7 @@ model:
   cue_encoder_channels: [8, 16, 24]
   cue_encoder_out_dim: 32
   content_fusion_dim: 96
+  early_fusion_dim: 80
   lite_cue_bands: 16
   lite_cue_hidden_dim: 48
   lite_cue_kernel_size: 3
@@ -57,6 +58,9 @@ model:
   cue_value_out_dim: 24
   cue_reliability_out_dim: 8
   dual_cue_fusion_mode: "concat"
+  dual_cue_use_tf_mask: false
+  dual_cue_tf_mask_hidden_channels: 8
+  dual_cue_tf_mask_residual_scale: 1.0
   use_cross_ear_interaction: false
   cue_bands: 32
   cue_hidden_dim: 64
@@ -78,6 +82,11 @@ model:
   use_gating: true                   # 是否启用门控（消融实验可设为 false）
 
   # 时序建模（BiGRU）
+  temporal_encoder_type: "gru"
+  mamba_num_layers: 2
+  mamba_state_dim: 16
+  mamba_expand_factor: 2
+  mamba_conv_kernel: 4
   gru_hidden_size: 128
   gru_num_layers: 2
   gru_dropout: 0.1

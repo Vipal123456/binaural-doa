@@ -1,4 +1,4 @@
-"""时序建模（BiGRU）+ Attention Pooling + 分类/回归头。
+"""时序建模（BiGRU / BiLSTM）+ Attention Pooling + 分类/回归头。
 
 接收融合后的特征序列，输出逐帧或逐片段的方位角 logits。
 
@@ -10,9 +10,15 @@ import torch
 import torch.nn as nn
 import math
 
+try:
+    from mambapy.mamba import Mamba, MambaConfig
+except Exception:  # pragma: no cover - optional dependency
+    Mamba = None
+    MambaConfig = None
+
 
 class TemporalHead(nn.Module):
-    """BiGRU 时序编码器 + 线性分类头 + 回归头。
+    """BiGRU / BiLSTM 时序编码器 + 线性分类头 + 回归头。
 
     参数
     ----------
@@ -39,6 +45,11 @@ class TemporalHead(nn.Module):
         input_dim: int,
         gru_hidden_size: int = 128,
         gru_num_layers: int = 2,
+        temporal_encoder_type: str = "gru",
+        mamba_num_layers: int = 2,
+        mamba_state_dim: int = 16,
+        mamba_expand_factor: int = 2,
+        mamba_conv_kernel: int = 4,
         num_classes: int = 72,
         gru_dropout: float = 0.1,
         dropout: float = 0.2,
@@ -55,54 +66,83 @@ class TemporalHead(nn.Module):
         self.use_front_back_auxiliary = use_front_back_auxiliary
         self.num_classes = num_classes
         self.azimuth_range = tuple(azimuth_range)
+        self.temporal_encoder_type = temporal_encoder_type
 
-        self.gru = nn.GRU(
-            input_size=input_dim,
-            hidden_size=gru_hidden_size,
-            num_layers=gru_num_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=gru_dropout if gru_num_layers > 1 else 0.0,
-        )
-
-        # BiGRU 输出维度 = 2 * hidden_size
-        gru_out_dim = 2 * gru_hidden_size
+        rnn_dropout = gru_dropout if gru_num_layers > 1 else 0.0
+        if temporal_encoder_type == "gru":
+            self.temporal_encoder = nn.GRU(
+                input_size=input_dim,
+                hidden_size=gru_hidden_size,
+                num_layers=gru_num_layers,
+                batch_first=True,
+                bidirectional=True,
+                dropout=rnn_dropout,
+            )
+            temporal_out_dim = 2 * gru_hidden_size
+        elif temporal_encoder_type == "lstm":
+            self.temporal_encoder = nn.LSTM(
+                input_size=input_dim,
+                hidden_size=gru_hidden_size,
+                num_layers=gru_num_layers,
+                batch_first=True,
+                bidirectional=True,
+                dropout=rnn_dropout,
+            )
+            temporal_out_dim = 2 * gru_hidden_size
+        elif temporal_encoder_type == "mamba":
+            if Mamba is None or MambaConfig is None:
+                raise ImportError(
+                    "temporal_encoder_type='mamba' requires mambapy to be installed."
+                )
+            self.temporal_encoder = Mamba(
+                MambaConfig(
+                    d_model=input_dim,
+                    n_layers=mamba_num_layers,
+                    d_state=mamba_state_dim,
+                    expand_factor=mamba_expand_factor,
+                    d_conv=mamba_conv_kernel,
+                    use_cuda=False,
+                )
+            )
+            temporal_out_dim = input_dim
+        else:
+            raise ValueError(f"Unsupported temporal_encoder_type: {temporal_encoder_type}")
 
         self.dropout = nn.Dropout(dropout)
 
         # Attention Pooling: 对时间维进行可学习加权聚合
         if self.use_attention_pooling:
-            attn_hidden = max(gru_out_dim // 2, 32)
+            attn_hidden = max(temporal_out_dim // 2, 32)
             self.attn_pool = nn.Sequential(
-                nn.Linear(gru_out_dim, attn_hidden),
+                nn.Linear(temporal_out_dim, attn_hidden),
                 nn.Tanh(),
                 nn.Linear(attn_hidden, 1),
             )
 
         # 分类头：输出离散的方位角类别
         if not self.use_pure_regression:
-            self.classifier = nn.Linear(gru_out_dim, num_classes)
+            self.classifier = nn.Linear(temporal_out_dim, num_classes)
 
         # front/back 辅助头：显式学习前后判别
         if self.use_front_back_auxiliary:
-            self.front_back_classifier = nn.Linear(gru_out_dim, 2)
+            self.front_back_classifier = nn.Linear(temporal_out_dim, 2)
 
         # 回归头：输出连续的方位角值（弧度，范围 [-π, π]）
         if use_regression and not self.use_pure_regression:
             self.regressor = nn.Sequential(
-                nn.Linear(gru_out_dim, gru_out_dim // 2),
+                nn.Linear(temporal_out_dim, temporal_out_dim // 2),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(gru_out_dim // 2, 1),
+                nn.Linear(temporal_out_dim // 2, 1),
                 nn.Tanh()  # 输出范围 [-1, 1]，需要乘以π得到弧度
             )
 
         if self.use_pure_regression:
             self.vector_regressor = nn.Sequential(
-                nn.Linear(gru_out_dim, gru_out_dim // 2),
+                nn.Linear(temporal_out_dim, temporal_out_dim // 2),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(gru_out_dim // 2, 2),
+                nn.Linear(temporal_out_dim // 2, 2),
             )
 
             centers_deg = self.azimuth_range[0] + (torch.arange(num_classes).float() + 0.5) * (
@@ -121,15 +161,18 @@ class TemporalHead(nn.Module):
               - ``"angle"``: ``[B]`` — 片段级回归角度（弧度，范围 [-π, π]），仅在 use_regression=True 时存在
         """
         # 输入 shape: [B, T, D_fused]
-        gru_out, _ = self.gru(x)          # [B, T, 2*H]
+        if self.temporal_encoder_type == "mamba":
+            temporal_out = self.temporal_encoder(x)  # [B, T, D]
+        else:
+            temporal_out, _ = self.temporal_encoder(x)  # [B, T, 2*H]
         # 对时间维进行池化，得到片段级预测
         if self.use_attention_pooling:
-            attn_logits = self.attn_pool(gru_out)          # [B, T, 1]
+            attn_logits = self.attn_pool(temporal_out)     # [B, T, 1]
             attn_weights = torch.softmax(attn_logits, dim=1)
-            pooled = (attn_weights * gru_out).sum(dim=1)   # [B, 2*H]
+            pooled = (attn_weights * temporal_out).sum(dim=1)
         else:
-            pooled = gru_out.mean(dim=1)                   # [B, 2*H]
-        pooled = self.dropout(pooled)     # [B, 2*H]
+            pooled = temporal_out.mean(dim=1)
+        pooled = self.dropout(pooled)
 
         if self.use_pure_regression:
             angle_vec = self.vector_regressor(pooled)  # [B, 2]

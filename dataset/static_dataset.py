@@ -326,6 +326,7 @@ class StaticDOADataset(Dataset):
             for seg_idx in range(num_segments):
                 start_sec = seg_idx * self.segment_hop_seconds
                 self.segments.append({
+                    "file_id": rec.file_id,
                     "audio_path": rec.audio_path,
                     "start_sec": start_sec,
                     "duration_sec": self.segment_seconds,
@@ -450,7 +451,13 @@ class StaticDOADataset(Dataset):
         audio_tensor = torch.from_numpy(audio).float()
         feats = self.feature_extractor.extract(audio_tensor)
 
+        file_id = seg.get("file_id")
+        if file_id is None:
+            basename = os.path.basename(seg["audio_path"])
+            file_id = basename.replace("binaural", "").replace(".wav", "")
+
         return {
+            "file_id": file_id,
             "log_mag_L": feats["log_mag_L"],   # [T, F]
             "log_mag_R": feats["log_mag_R"],   # [T, F]
             "spec_real_L": feats["spec_real_L"],  # [T, F]

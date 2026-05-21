@@ -1,0 +1,56 @@
+dataset:
+  dataset_type: "static"
+  sample_rate: 16000
+  segment_seconds: 2.0
+  root_dir: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/train_subjects"
+  train_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/train_subjects"
+  val_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/val_subjects"
+  test_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/test_subjects_unseen"
+  split_seed: 42
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: "hann"
+
+model:
+  type: "native_lite_v7_early_fusion"
+  encoder_channels: [24, 40, 64]
+  encoder_out_dim: 96
+  encoder_variant: "v2_balanced"
+  early_fusion_dim: 80
+  gru_hidden_size: 80
+  gru_num_layers: 1
+  gru_dropout: 0.1
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.2
+  use_attention_pooling: true
+  use_front_back_auxiliary: true
+  use_regression: false
+  use_pure_regression: false
+
+train:
+  batch_size: 64
+  num_workers: 8
+  epochs: 100
+  lr: 0.0005
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+  scheduler: "cosine"
+  cosine_T_max: 100
+  cosine_eta_min: 0.00001
+  amp: false
+  device: "cuda"
+  grad_clip: 1.0
+  anti_confusion_weight: 0.0
+  circular_soft_label_weight: 0.0
+  front_back_aux_weight: 0.3
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+
+output:
+  save_dir: "outputs/checkpoints_multisubject_robust50h_v7_earlyfusion_all_cf80_gru80_nocsl_fbaux_cohfix"
+  log_dir: "outputs/logs_multisubject_robust50h_v7_earlyfusion_all_cf80_gru80_nocsl_fbaux_cohfix"
