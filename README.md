@@ -549,6 +549,10 @@ x ∈ [B, 5, T, F]
 - `v7 early-fusion single-encoder baseline`
   - 验证早融合是否足够强
   - 结果证明：它是强 baseline，但在 unseen-subject test 上不如分流主线稳
+- `BiL-style GCC-PHAT CRN`
+  - 当前最有说服力的外部轻量深度 baseline
+- `FAViT-style ILD/IPD`
+  - 作为外部 Transformer baseline 保留，用于说明“显式 cue + Transformer”并不天然优于更贴近双耳定位结构的设计
 - `v5 enhanced + fbaux_only + cohfix`
   - 原生重模型参照
 - `SDEL-DOA-Cls + fbaux`
@@ -607,6 +611,8 @@ x ∈ [B, 5, T, F]
 | 轻量 compact 主线 `cf80_cue24_gru80 (3-seed avg)` | `seed42 / seed43 / seed44` | 0.6772 | 0.3901 | 0.7498 | 0.8625 | 12.58° | 0.0896 | 0.0090 | 0.0698 |
 | 稳定参照线 `encoder v2 balanced` | `train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml` | 0.6644 | 0.3856 | 0.7526 | 0.8550 | 12.91° | 0.0916 | 0.0064 | 0.0731 |
 | 分类强参照线 `lite cue all` | `train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_nocsl_fbaux_cohfix.yaml` | 0.7133 | 0.4264 | 0.7800 | 0.8656 | 13.89° | 0.1078 | 0.0088 | 0.0821 |
+| 外部轻量 baseline `BiL-style GCC-PHAT CRN` | `train_librispeech_multisubject_robust50h_bilstyle_gccphat_crn72_nocsl.yaml` | 0.6962 | 0.4032 | 0.7621 | 0.8629 | 14.98° | 0.1029 | 0.0082 | 0.0892 |
+| 外部 Transformer baseline `FAViT-style ILD/IPD` | `train_librispeech_multisubject_robust50h_favitstyle_ildipd_nocsl_fbaux_cohfix.yaml` | 0.6162 | 0.3303 | 0.7002 | 0.8300 | 16.58° | 0.1164 | 0.0109 | - |
 | 内容-only baseline | `train_librispeech_multisubject_robust50h_v7_contentonly_cf80_gru80_nocsl_fbaux_cohfix.yaml` | 0.3062 | 0.1425 | 0.3642 | 0.5163 | 25.02° | 0.2241 | 0.0199 | 0.1383 |
 | Early-fusion baseline | `train_librispeech_multisubject_robust50h_v7_earlyfusion_all_cf80_gru80_nocsl_fbaux_cohfix.yaml` | 0.5944 | 0.3278 | 0.6664 | 0.8139 | 13.86° | 0.0877 | 0.0073 | - |
 | 原生重模型参照 `v5 + enhanced + fbaux_only + cohfix + no-csl` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml` | 0.6661 | 0.3828 | 0.7429 | 0.8720 | 11.92° | 0.0967 | 0.0089 | 0.0667 |
@@ -623,12 +629,14 @@ x ∈ [B, 5, T, F]
   - `noise scenes unseen`
   - 其余协议与原始 `test_subjects_unseen` 保持一致
 
-当前最关键的三条线在 `unseen-noise` 上的结果如下：
+当前最关键的主线和外部 baseline 在 `unseen-noise` 上的结果如下：
 
 | 模型 | 评估配置 | Accuracy | F1-score | Acc@5° | Acc@10° | MAE | FB err | Opp err | Large err |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | 论文方法主线 `dual cue value/reliability` | `configs/eval_librispeech_multisubject_robust50h_v7_dualcue_vr_cf80_gru80_noiseheldout.yaml` | 0.6891 | 0.4101 | 0.7648 | 0.8611 | 12.10° | 0.0891 | 0.0124 | 0.0623 |
 | 轻量 compact 主线 `cf80_cue24_gru80` | `configs/eval_librispeech_multisubject_robust50h_v7_cf80_cue24_gru80_noiseheldout.yaml` | 0.6463 | 0.3714 | 0.7231 | 0.8419 | 13.32° | 0.0974 | 0.0091 | 0.0791 |
+| 外部轻量 baseline `BiL-style GCC-PHAT CRN` | `configs/eval_librispeech_multisubject_robust50h_bilstyle_gccphat_crn72_noiseheldout.yaml` | 0.6777 | 0.3929 | 0.7390 | 0.8487 | 16.17° | 0.1112 | 0.0112 | 0.0968 |
+| 外部 Transformer baseline `FAViT-style ILD/IPD` | `configs/eval_librispeech_multisubject_robust50h_favitstyle_ildipd_noiseheldout.yaml` | 0.6123 | 0.3274 | 0.6978 | 0.8351 | 16.32° | 0.1118 | 0.0090 | - |
 | Early-fusion baseline | `configs/eval_librispeech_multisubject_robust50h_v7_earlyfusion_all_cf80_gru80_noiseheldout.yaml` | 0.5968 | 0.3321 | 0.6697 | 0.8117 | 13.72° | 0.0882 | 0.0061 | 0.0756 |
 
 #### `unseen-noise` 结论
@@ -639,6 +647,12 @@ x ∈ [B, 5, T, F]
 - `cf80_cue24_gru80`
   - 相比原始 seen-noise test 有明显下降
   - 说明 compact 化会牺牲一部分未见噪声鲁棒性
+- `BiL-style GCC-PHAT CRN`
+  - 在 `Accuracy / F1 / Acc@5°` 上仍然是一个很强的外部 baseline
+  - 但 `MAE / front-back / large error` 明显落后于 `dual cue`，说明统一 GCC-PHAT CRN 更容易被少量前后混淆样本拉高尾部误差
+- `FAViT-style ILD/IPD`
+  - 说明频率优先 patch Transformer 并没有自然带来更强的双耳定位泛化
+  - 在当前协议下整体弱于 `BiL-style` 和当前分流主线
 - `early-fusion`
   - 仍然是一个有竞争力的 baseline
   - 但在 unseen-noise 条件下仍明显落后于 `dual cue`
@@ -680,6 +694,8 @@ x ∈ [B, 5, T, F]
 - 在外部 backbone 上：
   - `SDEL-DOA-Cls + fbaux` 是当前最强分类结果。
   - `SDEL-DOA-Reg` 的 `MAE` 最低，仍值得继续做 `+ fbaux` 或联合任务验证。
+  - `BiL-style GCC-PHAT CRN` 是当前最强、最贴题的外部轻量 baseline；它在 `Accuracy / F1 / Acc@5°` 上已经接近甚至局部超过 `dual cue`，但 `MAE / front-back / large error` 明显更差，说明显式 `value / reliability` 分解更有利于控制结构性大错。
+  - `FAViT-style ILD/IPD` 作为外部 Transformer baseline 没有超过 `BiL-style`，也没有接近当前主线；这说明在当前 `360° / 72类 / unseen-subject / unseen-noise` 协议下，频率优先 patch Transformer 并不会自然优于更贴近双耳定位物理结构的 GCC-PHAT 或显式 cue 分流建模。
 
 ## 当前代码结构
 
