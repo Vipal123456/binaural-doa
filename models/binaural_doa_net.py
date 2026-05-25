@@ -37,6 +37,8 @@ from models.native_lite_v7 import (
     NativeLiteContentOnlyDOANet,
     NativeLiteEarlyFusionDOANet,
 )
+from models.favit_style_baseline import FAViTStyleBaseline
+from models.bil_style_baseline import BiLStyleGCCPHATCRNBaseline
 from models.sdel_crnn_baseline import SDELCRNNBaseline
 
 
@@ -357,6 +359,38 @@ def build_model(cfg):
             azimuth_range=tuple(m.azimuth_range),
             use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
             output_mode="reg" if model_type == "sdel_doa_reg" else "cls",
+        )
+
+    if model_type == "favit_style_baseline":
+        return FAViTStyleBaseline(
+            freq_bins=freq_bins,
+            cue_input_mode=getattr(m, "favit_cue_input_mode", "ild_ipd"),
+            time_bins=getattr(m, "favit_time_bins", 16),
+            num_patches=getattr(m, "favit_num_patches", 16),
+            embed_dim=getattr(m, "favit_embed_dim", 64),
+            depth=getattr(m, "favit_depth", 6),
+            num_heads=getattr(m, "favit_num_heads", 4),
+            mlp_ratio=getattr(m, "favit_mlp_ratio", 4.0),
+            dropout=m.dropout,
+            num_classes=m.num_classes,
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+        )
+
+    if model_type == "bil_style_gccphat_crn_72cls":
+        return BiLStyleGCCPHATCRNBaseline(
+            freq_bins=freq_bins,
+            gcc_bins=getattr(m, "bil_gcc_bins", 64),
+            cnn_channels=getattr(m, "bil_cnn_channels", [32, 64, 96]),
+            f_pool_size=getattr(m, "bil_f_pool_size", [2, 2, 2]),
+            t_pool_size=getattr(m, "bil_t_pool_size", [1, 1, 1]),
+            kernel_size=tuple(getattr(m, "bil_kernel_size", [3, 3])),
+            dropout=m.dropout,
+            gru_hidden_size=getattr(m, "bil_gru_hidden_size", 96),
+            gru_num_layers=getattr(m, "bil_gru_num_layers", 1),
+            bidirectional=getattr(m, "bil_bidirectional", True),
+            mlp_hidden_size=getattr(m, "bil_mlp_hidden_size", 128),
+            num_classes=m.num_classes,
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
         )
 
     if model_type == "native_lite_v7":

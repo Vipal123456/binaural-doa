@@ -9,4 +9,6 @@ from models.native_lite_v7 import (
     NativeLiteContentOnlyDOANet,
     NativeLiteEarlyFusionDOANet,
 )
+from models.favit_style_baseline import FAViTStyleBaseline
+from models.bil_style_baseline import BiLStyleGCCPHATCRNBaseline
 from models.sdel_crnn_baseline import SDELCRNNBaseline

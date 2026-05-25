@@ -61,6 +61,22 @@ model:
   dual_cue_use_tf_mask: false
   dual_cue_tf_mask_hidden_channels: 8
   dual_cue_tf_mask_residual_scale: 1.0
+  favit_cue_input_mode: "ild_ipd"
+  favit_time_bins: 16
+  favit_num_patches: 16
+  favit_embed_dim: 64
+  favit_depth: 6
+  favit_num_heads: 4
+  favit_mlp_ratio: 4.0
+  bil_gcc_bins: 64
+  bil_cnn_channels: [32, 64, 96]
+  bil_f_pool_size: [2, 2, 2]
+  bil_t_pool_size: [1, 1, 1]
+  bil_kernel_size: [3, 3]
+  bil_gru_hidden_size: 96
+  bil_gru_num_layers: 1
+  bil_bidirectional: true
+  bil_mlp_hidden_size: 128
   use_cross_ear_interaction: false
   cue_bands: 32
   cue_hidden_dim: 64

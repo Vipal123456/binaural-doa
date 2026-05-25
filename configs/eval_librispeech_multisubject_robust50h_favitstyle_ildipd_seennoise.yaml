@@ -1,0 +1,38 @@
+dataset:
+  dataset_type: "static"
+  sample_rate: 16000
+  segment_seconds: 2.0
+  root_dir: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/train_subjects"
+  train_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/train_subjects"
+  val_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/val_subjects"
+  test_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_robust50h_v1/test_subjects_unseen"
+  split_seed: 42
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: "hann"
+
+model:
+  type: "favit_style_baseline"
+  favit_cue_input_mode: "ild_ipd"
+  favit_time_bins: 16
+  favit_num_patches: 16
+  favit_embed_dim: 64
+  favit_depth: 6
+  favit_num_heads: 4
+  favit_mlp_ratio: 4.0
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.1
+  use_front_back_auxiliary: true
+
+train:
+  batch_size: 64
+  num_workers: 8
+  device: "cuda"
+
+output:
+  save_dir: "outputs/checkpoints_multisubject_robust50h_favitstyle_ildipd_seennoise_eval"
+  log_dir: "outputs/logs_multisubject_robust50h_favitstyle_ildipd_seennoise_eval"
