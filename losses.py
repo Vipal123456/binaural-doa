@@ -260,6 +260,28 @@ class DOAVectorRegressionLoss(nn.Module):
         }
 
 
+class DPRTFMSELoss(nn.Module):
+    """MSE loss on the target direct-path RTF template."""
+
+    def __init__(self):
+        super().__init__()
+        self.mse = nn.MSELoss()
+
+    def forward(
+        self,
+        pred_rtf: torch.Tensor,
+        template_set: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict:
+        gather_idx = targets.long().view(-1, 1, 1).expand(-1, template_set.size(1), 1)
+        target_rtf = torch.gather(template_set, dim=2, index=gather_idx)
+        loss = self.mse(pred_rtf, target_rtf)
+        return {
+            "total": loss,
+            "regression": loss.item(),
+        }
+
+
 class PureRegressionDOALoss(nn.Module):
     """纯回归 DOA 损失：二维单位向量方向回归 + 可选 front/back 辅助。"""
 

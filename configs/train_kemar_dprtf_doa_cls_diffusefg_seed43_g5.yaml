@@ -1,0 +1,62 @@
+dataset:
+  root_dir: data/kemar_sofamyroom/train_20h_minimal_diffusefg/train
+  dataset_type: static
+  sample_rate: 16000
+  segment_seconds: 2.0
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  split_seed: 43
+  train_root: data/kemar_sofamyroom/train_20h_minimal_diffusefg/train
+  val_root: data/kemar_sofamyroom/val_4h_diffusefg_officialsplit/val
+  test_root: data/kemar_sofamyroom_diffusefg_static_v1_test_officialsplit/test
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: hann
+
+model:
+  type: dprtf_doa_cls
+  dprtf_template_path: data/dprtf_templates/rtf_dp_kemar72_16k.mat
+  dprtf_freq_bins_used: 128
+  dprtf_planes: 64
+  dprtf_rnn_hidden_size: 256
+  dprtf_use_residual_blocks: false
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.2
+  gru_hidden_size: 80
+  gru_num_layers: 1
+  gru_dropout: 0.1
+  use_front_back_auxiliary: false
+
+train:
+  batch_size: 32
+  num_workers: 8
+  epochs: 60
+  lr: 0.0005
+  weight_decay: 0.0001
+  label_smoothing: 0.0
+  scheduler: cosine
+  step_size: 30
+  step_gamma: 0.1
+  cosine_T_max: 60
+  cosine_eta_min: 1.0e-05
+  amp: false
+  device: cuda:5
+  grad_clip: 1.0
+  anti_confusion_weight: 0.0
+  circular_soft_label_weight: 0.0
+  circular_kappa: 4.0
+  front_back_aux_weight: 0.0
+  front_back_focus_weight: 0.0
+  front_back_focus_window_deg: 20.0
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 12
+
+output:
+  save_dir: outputs/checkpoints_kemar_dprtf_doa_cls_diffusefg_officialsplit_seed43_g6
+  log_dir: outputs/logs_kemar_dprtf_doa_cls_diffusefg_officialsplit_seed43_g6

@@ -1,1119 +1,697 @@
 # 双耳 DOA-Net
 
-基于 `LibriSpeech + CIPIC HRTF + 房间混响 + DEMAND 噪声` 的双耳声源到达方向（DOA）估计项目。
+面向**双耳水平声源定位（DOA）**的研究代码库。当前项目已经收束到一条明确主线：
 
-当前仓库已经收束到 `robust50h 多 subject / subject-disjoint unseen-subject` 主线。早期 `subject003` 单 subject 数据、旧诊断流水线和部分历史绘图脚本已经从当前工作树移除，README 也只保留还存在的配置、脚本和输出。
+- **任务**：72 类水平角双耳 DOA 分类（`0:5:355`）
+- **数据协议**：`KEMAR + SofaMyRoom` 静态双耳渲染
+- **鲁棒性评测**：在原测试集基础上，新增 `diffusefg` 扩散噪声测试协议
+- **目标**：在保证模型复杂度可控的前提下，提高噪声与混响条件下的定位稳健性
 
-## 当前主线
-
-- 数据协议：`30` 个 CIPIC subjects，按 `24 / 3 / 3` 划分 `train / val / unseen-test`
-- 主目标：在 unseen-subject test 上评估 HRTF 泛化
-- 当前评估重点：
-  - `accuracy`
-  - `f1_score`
-  - `mean_angular_error`
-  - `acc_at_5deg`
-  - `acc_at_10deg`
-  - `front_back_halfplane_error_rate`
-  - `opposite_error_rate`
-  - `large_error_rate`
-  - `front / back / side MAE`
-
-## 推荐主线地图
-
-这一版 README 只保留当前真正有研究价值的静态主线，并把已经确认价值不高的变体单独归档。现在最值得记住的是下面四条：
-
-### 1. 论文方法主线：`dual cue value/reliability`
-
-- 配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_dualcue_vr_cf80_gru80_nocsl_fbaux_cohfix.yaml`
-- 任务角色：
-  - **当前论文方法主线**
-  - 用来回答：`ILD / IPD` 这类空间差异值和 `coherence` 这类线索可靠性，是否应该显式分开建模
-- 结构关键词：
-  - `shared content encoder`
-  - `mean / diff / absdiff`
-  - `dual cue branches`
-  - `cue value = ILD + sin(IPD) + cos(IPD)`
-  - `cue reliability = coherence`
-  - `compact fusion + BiGRU`
-- 结构概念：
-
-```text
-log_mag_L / log_mag_R
-  -> shared EncoderV2Balanced
-  -> mean / diff / absdiff
-  -> content_fusion(288 -> 80)
-
-[ILD, sin(IPD), cos(IPD)]
-  -> cue value encoder
-  -> cue_value_feat(24)
-
-[coherence]
-  -> cue reliability encoder
-  -> cue_reliability_feat(8)
-
-concat([cue_value_feat, cue_reliability_feat])
-  -> cue_feat(32)
-
-concat([content_feat(80), cue_feat(32)])
-  -> fused_feat(112)
-  -> BiGRU(80)
-  -> classifier + fbaux
-```
-
-- 三次 seed 平均：
-  - `accuracy = 0.6838 ± 0.0076`
-  - `f1_score = 0.3982 ± 0.0094`
-  - `acc_at_5deg = 0.7616 ± 0.0058`
-  - `acc_at_10deg = 0.8681 ± 0.0153`
-  - `mean_angular_error = 11.76° ± 1.10`
-
-### 2. 轻量 compact 主线：`cf80_cue24_gru80`
-
-- 配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_cf80_cue24_gru80_nocsl_fbaux_cohfix.yaml`
-- 任务角色：
-  - **当前 compact / 部署主线**
-  - 用来回答：在不破坏整体表现的前提下，内容流、cue 流和 GRU 输入能压缩到什么程度
-- 结构关键词：
-  - `shared content encoder`
-  - `mean / diff / absdiff`
-  - `single lite cue encoder`
-  - `content_fusion_dim = 80`
-  - `cue_dim = 24`
-  - `gru_hidden = 80`
-- 结构概念：
-
-```text
-log_mag_L / log_mag_R
-  -> shared EncoderV2Balanced
-  -> mean / diff / absdiff
-  -> content_fusion(288 -> 80)
-
-[ILD, sin(IPD), cos(IPD), coherence]
-  -> LiteCueEncoder
-  -> cue_feat(24)
-
-concat([content_feat(80), cue_feat(24)])
-  -> fused_feat(104)
-  -> BiGRU(80)
-  -> classifier + fbaux
-```
-
-- 三次 seed 平均：
-  - `accuracy = 0.6772 ± 0.0217`
-  - `f1_score = 0.3901 ± 0.0140`
-  - `acc_at_5deg = 0.7498 ± 0.0190`
-  - `acc_at_10deg = 0.8625 ± 0.0092`
-  - `mean_angular_error = 12.58° ± 0.43`
-
-### 3. 稳定参照线：`encoder v2 balanced`
-
-- 配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml`
-- 任务角色：
-  - **稳定参照线 / MAE 参照**
-  - 用来说明：在不引入独立强 cue encoder 的情况下，把内容 encoder 做扎实就已经能明显改善鲁棒定位
-- 结构关键词：
-  - `shared content encoder`
-  - `cue stream as simple auxiliary`
-  - `additive fusion`
-- 结构概念：
-
-```text
-log_mag_L / log_mag_R
-  -> shared EncoderV2Balanced
-  -> mean / diff / absdiff
-
-[ILD, sin(IPD), cos(IPD), coherence]
-  -> band-pool + MLP
-  -> cue auxiliary feature
-
-mean_proj + diff_proj + absdiff_proj + cue_proj
-  -> fused_feat(160)
-  -> BiGRU(96)
-  -> classifier + fbaux
-```
-
-- test：
-  - `accuracy = 0.6644`
-  - `f1_score = 0.3856`
-  - `acc_at_5deg = 0.7526`
-  - `acc_at_10deg = 0.8550`
-  - `mean_angular_error = 12.91°`
-
-### 4. 分类强参照线：`lite cue all`
-
-- 配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_nocsl_fbaux_cohfix.yaml`
-- 任务角色：
-  - **分类强参照线**
-  - 用来说明：独立 cue 流一旦成立，`Acc / F1 / Acc@5 / Acc@10` 会迅速变强
-- 结构关键词：
-  - `shared content encoder`
-  - `single lite cue encoder`
-  - `content_feat(96) + cue_feat(32)`
-- 结构概念：
-
-```text
-log_mag_L / log_mag_R
-  -> shared EncoderV2Balanced
-  -> mean / diff / absdiff
-  -> content_fusion(288 -> 96)
-
-[ILD, sin(IPD), cos(IPD), coherence]
-  -> LiteCueEncoder
-  -> cue_feat(32)
-
-concat([content_feat(96), cue_feat(32)])
-  -> fused_feat(128)
-  -> BiGRU(96)
-  -> classifier + fbaux
-```
-
-- test：
-  - `accuracy = 0.7133`
-  - `f1_score = 0.4264`
-  - `acc_at_5deg = 0.7800`
-  - `acc_at_10deg = 0.8656`
-  - `mean_angular_error = 13.89°`
-
-### 5. 关键 baseline：`content-only` 与 `early-fusion`
-
-这两条不是最终主线，但在论文里很关键，因为它们把“显式 cue 到底值不值”讲清楚了。
-
-#### `content-only baseline`
-
-- 配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_contentonly_cf80_gru80_nocsl_fbaux_cohfix.yaml`
-- 任务角色：
-  - **最关键的消融 baseline**
-  - 用来回答：只靠左右耳内容关系，不使用显式 `ILD/IPD/coherence`，到底会掉多少
-- 结构概念：
-
-```text
-log_mag_L / log_mag_R
-  -> shared EncoderV2Balanced
-  -> mean / diff / absdiff
-  -> content_fusion(288 -> 80)
-  -> BiGRU(80)
-  -> classifier + fbaux
-```
-
-- test：
-  - `accuracy = 0.3062`
-  - `f1_score = 0.1425`
-  - `acc_at_5deg = 0.3642`
-  - `acc_at_10deg = 0.5163`
-  - `mean_angular_error = 25.02°`
-
-#### `early-fusion single-encoder baseline`
-
-- 配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_earlyfusion_all_cf80_gru80_nocsl_fbaux_cohfix.yaml`
-- 任务角色：
-  - **强单流 baseline**
-  - 用来回答：把内容和 cue 从输入端直接混合，能否替代显式分流建模
-- 结构概念：
-
-```text
-[mean log-magnitude, ILD, sin(IPD), cos(IPD), coherence]
-  -> shared EncoderV2Balanced
-  -> Linear(96 -> 80)
-  -> BiGRU(80)
-  -> classifier + fbaux
-```
-
-- test：
-  - `accuracy = 0.5944`
-  - `f1_score = 0.3278`
-  - `acc_at_5deg = 0.6664`
-  - `acc_at_10deg = 0.8139`
-  - `mean_angular_error = 13.86°`
-
-## 各 encoder 结构
-
-这一节只讲当前主线里真正还在使用的 encoder，不再展开已经明确放弃的重型历史结构。
-
-### 1. `EncoderV2Balanced`（内容流 encoder）
-
-对应实现：
-- [models/encoder.py](/disk2/bywang/DOA-net/models/encoder.py:1)
-
-当前使用它的模型：
-- `encoder v2 balanced`
-- `lite cue all`
-- `cf80_cue24_gru80`
-- `dual cue value/reliability`
-- `early-fusion baseline`（作为共享单流 encoder）
-
-#### 输入 / 输出
-
-- 输入：
-  - 单耳内容谱图 `x ∈ [B, 1, T, F]`
-  - 早融合 baseline 中输入改成 `x ∈ [B, 5, T, F]`
-- 输出：
-  - `h ∈ [B, T, D]`
-  - 默认 `D = 96`
-
-#### 默认通道配置
-
-```text
-encoder_channels = [24, 40, 64]
-encoder_out_dim = 96
-```
-
-#### 结构概念
-
-```text
-Stage 1: 1   -> 24
-Stage 2: 24  -> 40
-Stage 3: 40  -> 64
-Tail: AdaptiveAvgPool2d((None, 1)) + Linear(64 -> 96)
-```
-
-每个 stage 都是：
-
-```text
-pre_conv:
-  Conv2d(3x3, stride=1, padding=1)
-  + BN + ReLU
-
-downsample:
-  Depthwise Conv2d(3x3, stride=(1,2), padding=1)
-  + Pointwise Conv2d(1x1)
-  + BN + ReLU + Dropout2d
-```
-
-#### 关键特点
-
-- 时间维基本保留
-- 频率维逐 stage 压缩
-- 先局部建模，再沿频率轴下采样
-- 相比旧版单层 stride 卷积，更适合 noisy / reverberant 条件
-
-#### 作用
-
-- 这是当前所有主线共享的**内容流 backbone**
-- 负责把左右耳单耳谱图先编码成稳定的内容表示
-- 后面的 `mean / diff / absdiff` 都建立在它的输出之上
+当前 README 聚焦**现在仍在使用、仍有论文价值**的内容：项目背景、数据集协议、主模型、实验设置、结果与结论。
 
 ---
 
-### 2. 简单 cue MLP encoder（`encoder v2 balanced` 里的 cue 辅助流）
+## 1. 项目背景
 
-对应实现：
-- [models/native_lite_v7.py](/disk2/bywang/DOA-net/models/native_lite_v7.py:1)
+双耳 DOA 估计的核心信息来自双耳空间线索，例如：
 
-只用于：
-- `encoder v2 balanced`
+- `ILD`：左右耳能量差
+- `IPD`：左右耳相位差
+- `coherence`：双耳一致性 / 线索可靠性
 
-#### 输入
+但在真实条件下，这些线索并不总是稳定：
 
-```text
-[ILD, sin(IPD), cos(IPD), coherence]
-```
+- 混响会扰乱相位关系
+- 噪声会污染能量差
+- 低能量时频单元上的 cue 往往不可靠
+- 前后方向存在天然混淆
 
-#### 结构概念
+因此，当前项目的核心问题不是“是否存在空间线索”，而是：
 
-```text
-cue tensor
-  -> band pooling
-  -> flatten
-  -> MLP
-  -> cue_feat
-  -> Linear projection to fusion dim
-```
+> **如何在噪声、混响和扩散背景噪声下，从不总是稳定的双耳线索中提取可靠的方向信息。**
 
-#### 角色
+围绕这个问题，本项目当前重点研究两件事：
 
-- 它不是独立强 cue encoder
-- 更像给内容流提供一个轻量空间辅助项
-
-#### 作用
-
-- 用最小代价把 `ILD / IPD / coherence` 作为辅助 cue 注入内容主线
-- 主要服务于 `encoder v2 balanced` 这条稳健参照线
+1. **更真实、更困难的双耳静态鲁棒测试协议**
+2. **结构化、轻量化的双耳 DOA 模型设计**
 
 ---
 
-### 3. `LiteCueEncoder`（单分支轻量 cue encoder）
+## 2. 当前数据集主线
 
-对应实现：
-- [models/native_lite_v7.py](/disk2/bywang/DOA-net/models/native_lite_v7.py:1)
+## 2.1 静态 KEMAR 主数据集
 
-当前使用它的模型：
-- `lite cue all`
-- `cf80_cue24_gru80`
+当前正式主线使用：
 
-#### 输入
+- **HRTF / dummy head**：`KEMAR`
+- **房间渲染**：`SofaMyRoom`
+- **目标语音**：干净语音经 BRIR 渲染为双耳信号
+- **采样率**：`16 kHz`
+- **片段长度**：`2.0 s`
+- **类别数**：`72` 类水平角
+- **方位角**：`0:5:355`
 
-默认 `all` 模式下：
+当前实际使用的目录：
 
-```text
-[ILD, sin(IPD), cos(IPD), coherence]
-```
-
-#### 默认配置
-
-```text
-lite_cue_bands = 16
-lite_cue_hidden_dim = 48
-cue_encoder_out_dim = 32   # lite cue all
-cue_encoder_out_dim = 24   # cf80_cue24_gru80
-lite_cue_kernel_size = 3
-lite_cue_encoder_type = "temporal_conv"
-```
-
-#### 结构概念
-
-```text
-cue tensor [B, C, T, F]
-  -> adaptive band-pool (F -> 16)
-  -> reshape to [B, T, C*bands]
-  -> Conv1d(k=3) over time
-  -> BN + ReLU + Dropout
-  -> Conv1d(k=3) over time
-  -> BN + ReLU
-  -> cue_feat
-```
-
-#### 关键特点
-
-- 不复制一整条重型 2D cue-CNN
-- 先把频率维压成粗频带
-- 再只在时间维做轻量 cue 提纯
-- 是当前独立 cue 流成功的基础版本
-
-#### 作用
-
-- 负责把显式 binaural cues 编码成紧凑 cue 表征
-- 是 `lite cue all` 与 `cf80_cue24_gru80` 两条主线的核心 cue encoder
+- 训练集：`data/kemar_sofamyroom/train_20h_minimal_diffusefg/train`
+- 验证集：`data/kemar_sofamyroom/val_4h_diffusefg_officialsplit/val`
+- 测试集：`data/kemar_sofamyroom_diffusefg_static_v1_test_officialsplit/test`
 
 ---
 
-### 4. `DualBranchCueEncoder`（双分支 cue encoder）
+## 2.2 新 diffusefg 测试协议
 
-对应实现：
-- [models/native_lite_v7.py](/disk2/bywang/DOA-net/models/native_lite_v7.py:144)
+这是当前项目里最重要的数据协议升级。
 
-当前使用它的模型：
-- `dual cue value/reliability`
-- `dual cue + reliability gating`（实验中）
+与旧测试集相比，它**不改变目标语音渲染、角度设置、房间测试网格和评测指标**，只替换背景噪声生成方式：
 
-#### 分支定义
+- 旧方式：`post-mix scene noise`
+- 新方式：`mono scene noise -> ANF -> 2-channel diffuse noise`
 
-##### value branch
+当前 diffusefg 协议的关键点：
+
+- 背景噪声来自场景噪声底材
+- 经 `ANF` 生成双通道扩散噪声场
+- 再按目标 `SNR` 混入双耳目标语音
+
+这个协议的意义是：
+
+1. 背景噪声比简单后混更像空间化扩散噪声
+2. 测试难度更高，更能拉开模型差异
+3. 更适合评价“鲁棒双耳定位”而不是理想条件分类
+
+---
+
+## 2.3 当前使用的 SNR 协议
+
+训练 / 验证：
+
+- `SNR ~ Uniform[-10, 10] dB`
+
+测试集包含：
+
+- `clean`
+- `10 dB`
+- `5 dB`
+- `0 dB`
+- `-5 dB`
+- `-10 dB`
+
+论文主表统一统计 `10 / 5 / 0 / -5 / -10 dB`，不包含 `clean`，也不使用额外的 `-15 dB` 压力测试。完整评测文件仍保留 clean 结果用于审计。
+
+---
+
+## 3. 模型设计主线
+
+当前项目中最重要的方法线是 `v7` 系列，尤其是：
+
+- `v7_dualcue_fbfocus`
+- `v7_dualcue_liteenc_v1`
+
+这条模型的设计出发点不是“堆模块”，而是围绕双耳 DOA 的几个真实矛盾来设计：
+
+1. **只看空间 cue 不够稳**
+2. **直接把原始 STFT 全交给大模型学习代价太高**
+3. **方向估计不仅要看 cue 的值，还要看 cue 是否可靠**
+
+因此当前 `v7` 的核心思路是：
+
+> **先提取共享内容表示，再显式建模双耳差异与空间 cue，最后在低维表示上做轻量时序聚合。**
+
+---
+
+## 3.0 代表模型的完整前向流程
+
+为了让模型描述更落地，下面以当前最重要的轻量主线
+`v7_dualcue_liteenc_v1` 为例，把从输入到输出的张量流完整写出来。
+
+对应配置的代表参数是：
+
+- `n_fft = 512`，因此频点数 `F = 257`
+- 片段长度 `2.0 s`，`hop_length = 160`，因此时间帧数通常约为 `T ≈ 201`
+- `content_encoder_type = lite_v1`
+- `encoder_channels = [16, 24, 32]`
+- `encoder_out_dim = 64`
+- `content_relation_mode = mean_diff_absdiff`
+- `content_fusion_dim = 80`
+- `lite_cue_bands = 16`
+- `cue_value_out_dim = 24`
+- `cue_reliability_out_dim = 8`
+- `gru_hidden_size = 80`
+- `num_classes = 72`
+
+下面的张量维度都按这个主配置来说明。
+
+### Step 1. 输入特征组织
+
+每条样本先提取以下双耳特征：
+
+- `log_mag_L`：`[B, T, F]`
+- `log_mag_R`：`[B, T, F]`
+- `ILD`：`[B, T, F]`
+- `IPD` 再拆成：
+  - `sin(IPD)`：`[B, T, F]`
+  - `cos(IPD)`：`[B, T, F]`
+- `coherence`：`[B, T, F]`
+
+其中：
+
+- content 流使用 `log_mag_L / log_mag_R`
+- cue value 流使用 `ILD / sin(IPD) / cos(IPD)`
+- cue reliability 流使用 `coherence`
+
+### Step 2. 左右耳内容输入成形
+
+对 content 流，左右耳各自扩一维通道：
+
+- 左耳：`log_mag_L -> [B, 1, T, F]`
+- 右耳：`log_mag_R -> [B, 1, T, F]`
+
+左右耳共用**同一个**内容编码器，权重共享，不分别训练两套卷积核。
+
+### Step 3. Content Encoder：`LightContentEncoderV1`
+
+这是 `liteenc_v1` 的关键轻量化部分，定义在 [`models/encoder.py`](models/encoder.py)。
+
+它由 3 个轻量 stage 组成，每个 stage 的结构是：
+
+1. `1x1 pointwise conv`
+2. `3x3 depthwise conv`
+3. `1x3 depthwise conv, stride=(1,2)`，只沿频率轴下采样
+4. `1x1 pointwise conv`
+5. `BatchNorm + ReLU + Dropout`
+
+对应通道数变化：
+
+- Stage 1: `1 -> 16`
+- Stage 2: `16 -> 24`
+- Stage 3: `24 -> 32`
+
+因为每个 stage 只压频率轴，不压时间轴，所以：
+
+- 时间维基本保持：`T -> T`
+- 频率维大约变成：`257 -> 129 -> 65 -> 33`
+
+于是左右耳分别得到中间张量：
+
+- `H_L, H_R : [B, 32, T, 33]`
+
+然后做：
+
+1. `AdaptiveAvgPool2d((None, 1))`，把频率维压到 `1`
+2. `squeeze + permute`
+3. `Linear(32 -> 64)` 投影
+
+最终得到：
+
+- `F_L : [B, T, 64]`
+- `F_R : [B, T, 64]`
+
+也就是说，content encoder 的输出不是完整 `T x F` 网格，而是每个时间步一个 `64` 维内容向量。
+
+### Step 4. 双耳内容关系分解
+
+当前主线不是直接 `concat(F_L, F_R)`，而是先做显式关系拆分：
+
+- `mean_feat = 0.5 * (F_L + F_R)` -> `[B, T, 64]`
+- `diff_feat = F_L - F_R` -> `[B, T, 64]`
+- `abs_diff_feat = |F_L - F_R|` -> `[B, T, 64]`
+
+在 `mean_diff_absdiff` 模式下，把三者拼接：
+
+- `content_relation = concat(mean, diff, absdiff)` -> `[B, T, 192]`
+
+然后经过 `content_fusion`：
+
+- `Linear(192 -> 80)`
+- `LayerNorm`
+- `ReLU`
+- `Dropout`
+
+得到压缩后的内容表示：
+
+- `content_feat : [B, T, 80]`
+
+这一步的含义是：
+
+- 用 `mean` 保留共享内容
+- 用 `diff` 保留带符号双耳差异
+- 用 `absdiff` 保留差异强度
+- 再把三种关系压到一个低维内容子空间中
+
+### Step 5. Dual-Cue Encoder：value / reliability 双分支
+
+这部分定义在 [`models/native_lite_v7.py`](models/native_lite_v7.py)。
+
+#### 5.1 Value branch
+
+先把三种方向 cue 组起来：
+
+- `value_tensor = stack([ILD, sin(IPD), cos(IPD)], dim=1)`
+- 形状：`[B, 3, T, F]`
+
+然后进入 `LiteCueEncoder(in_channels=3)`：
+
+1. 先把每个时间步的频率轴自适应压到 `16` 个 band
+2. 张量从 `[B, 3, T, 257]` 变成 `[B, T, 3, 16]`
+3. 再展平为 `[B, T, 48]`
+4. 转成 `Conv1d` 需要的格式 `[B, 48, T]`
+5. 两层时间卷积：
+   - `Conv1d(48 -> 48, k=3)`
+   - `Conv1d(48 -> 24, k=3)`
+
+最后转回：
+
+- `cue_value_feat : [B, T, 24]`
+
+#### 5.2 Reliability branch
+
+可靠性分支只吃 `coherence`：
+
+- `reliability_tensor = coherence.unsqueeze(1)` -> `[B, 1, T, F]`
+
+同样先压到 `16` 个 band，再展平：
+
+- `[B, 1, T, 257] -> [B, T, 1, 16] -> [B, T, 16]`
+
+再用更轻的时间卷积编码，输出：
+
+- `cue_reliability_feat : [B, T, 8]`
+
+#### 5.3 Dual-Cue 融合
+
+当前默认是 `concat` 融合：
+
+- `cue_feat = concat(cue_value_feat, cue_reliability_feat)`
+- `cue_feat : [B, T, 32]`
+
+因此，dual-cue 分支最后提供的是：
+
+- `24` 维“cue value”
+- `8` 维“cue reliability”
+- 合起来 `32` 维 cue 表示
+
+### Step 6. Content / Cue 融合
+
+把两条流在特征维拼接：
+
+- `fused = concat(content_feat, cue_feat)`
+- `[B, T, 80] + [B, T, 32] -> [B, T, 112]`
+
+然后经过：
+
+- `LayerNorm(112)`
+- `Dropout`
+
+所以送入时序头的最终输入是：
+
+- `fused_feat : [B, T, 112]`
+
+### Step 7. Temporal Head
+
+这部分定义在 [`models/temporal_head.py`](models/temporal_head.py)。
+
+默认使用：
+
+- `BiGRU`
+- `hidden_size = 80`
+- `num_layers = 1`
+
+因此：
+
+- 输入：`[B, T, 112]`
+- 输出：`[B, T, 160]`
+
+因为双向 GRU 的两个方向各输出 `80` 维，拼起来是 `160` 维。
+
+### Step 8. Attention Pooling
+
+时序头默认不是简单平均，而是注意力池化：
+
+1. 对每个时间步的 `160` 维特征打一个分数
+2. 经 `softmax` 变成时间权重
+3. 做加权求和
+
+于是：
+
+- `temporal_out : [B, T, 160]`
+- `attn_weights : [B, T, 1]`
+- `pooled : [B, 160]`
+
+这个 `pooled` 就是整段 2 秒语音的片段级表示。
+
+### Step 9. 输出头
+
+主任务输出头是：
+
+- `Linear(160 -> 72)`
+
+得到：
+
+- `logits : [B, 72]`
+
+如果启用前后辅助头，还会额外输出：
+
+- `front_back_logits : [B, 2]`
+
+因此当前主模型的最终任务形式是：
+
+- 主任务：72 类水平角分类
+- 辅助任务：前 / 后二分类（可选）
+
+### Step 10. 整体张量流总结
+
+把整个前向过程压缩成一行，可以写成：
+
+```text
+log_mag_L / log_mag_R : [B,T,F]
+    -> shared LightContentEncoderV1
+    -> F_L, F_R : [B,T,64]
+    -> mean/diff/absdiff
+    -> concat : [B,T,192]
+    -> Linear + LN + ReLU
+    -> content_feat : [B,T,80]
+
+ILD / sin(IPD) / cos(IPD) : [B,T,F]
+    -> value branch
+    -> cue_value_feat : [B,T,24]
+
+coherence : [B,T,F]
+    -> reliability branch
+    -> cue_reliability_feat : [B,T,8]
+
+concat(content_feat, cue_feat)
+    -> fused_feat : [B,T,112]
+    -> BiGRU : [B,T,160]
+    -> attention pooling : [B,160]
+    -> classifier : [B,72]
+```
+
+这个版本也解释了为什么 `v7_dualcue_liteenc_v1` 的复杂度能压得很低：
+
+- content 流没有在高分辨率上使用重型常规 2D CNN
+- cue 流先做频带压缩，再做时间建模
+- 时序头只处理 `112` 维低维融合序列，而不是完整 `T x F` 网格
+
+---
+
+## 3.1 Shared Content Stream
 
 输入：
 
-```text
-[ILD, sin(IPD), cos(IPD)]
-```
+- `log_mag_L`
+- `log_mag_R`
 
-输出：
+左右耳分别通过**同一个内容编码器**，得到：
 
-```text
-cue_value_feat ∈ [B, T, 24]
-```
+- `F_L`
+- `F_R`
 
-##### reliability branch
+这条 content 流的作用不是直接输出方向，而是：
 
-输入：
+1. 提取左右耳共享的主声学内容
+2. 为不稳定的空间 cue 提供上下文参考
+3. 帮助模型区分有效语音结构与噪声/混响扰动
 
-```text
-[coherence]
-```
+也就是说，content 流回答的是：
 
-输出：
-
-```text
-cue_reliability_feat ∈ [B, T, 8]
-```
-
-两支内部都复用 `LiteCueEncoder` 的轻量思路：
-- band-pool
-- temporal Conv1d
-
-#### `concat` 版本（当前 README 主方法结果）
-
-```text
-cue_value_feat(24)
-cue_reliability_feat(8)
--> concat
--> cue_feat(32)
-```
-
-再和内容流融合：
-
-```text
-content_feat(80) + cue_feat(32)
--> fused_feat(112)
--> BiGRU(80)
-```
-
-#### `gate` 版本（当前新增实验）
-
-```text
-cue_reliability_feat(8)
-  -> Linear(8 -> 24)
-  -> Sigmoid
-  -> gate(24)
-
-cue_feat = cue_value_feat * gate
-```
-
-这时：
-
-```text
-content_feat(80) + cue_feat(24)
--> fused_feat(104)
--> BiGRU(80)
-```
-
-#### 关键特点
-
-- `coherence` 不再只是并列 cue
-- 而是被解释成 `reliability`
-- 更贴近“空间差异值 + 线索可靠性”这个方法叙事
-
-#### 作用
-
-- 把“空间差异值”和“线索可靠性”拆开建模
-- 是当前 `dual cue value/reliability` 方法主线最核心的结构点
+> 当前这段双耳观测里，左右耳共同听到了什么。
 
 ---
 
-### 5. `Early-Fusion Shared Encoder`（单流早融合 baseline）
+## 3.2 Binaural Relation Decomposition
 
-对应实现：
-- [models/native_lite_v7.py](/disk2/bywang/DOA-net/models/native_lite_v7.py:1)
+当前 `v7` 没有直接把左右耳内容特征生拼，而是构造：
 
-当前使用它的模型：
-- `early-fusion single-encoder baseline`
+- `mean(F_L, F_R)`
+- `diff(F_L, F_R)`
+- `absdiff(F_L, F_R)`
 
-#### 输入
-
-```text
-[mean log-magnitude, ILD, sin(IPD), cos(IPD), coherence]
-```
+这一步的意义：
 
-也就是一个 `5` 通道输入：
+- `mean`：共享内容
+- `diff`：带符号方向差异
+- `absdiff`：差异强度
 
-```text
-x ∈ [B, 5, T, F]
-```
+相比直接 `concat(F_L, F_R)`，这种做法更结构化，能显式区分：
 
-#### 结构概念
+1. 左右耳共同成分
+2. 与方向有关的差异
+3. 差异幅度信息
 
-```text
-5-channel early fusion input
-  -> shared EncoderV2Balanced
-  -> Linear(96 -> 80)
-  -> BiGRU(80)
-  -> classifier + fbaux
-```
+而且这一步计算代价很低，是当前模型最有代表性的结构点之一。
 
-#### 关键特点
+---
 
-- 内容和 cue 从输入端就混合
-- 是一个强 baseline
-- 但在 unseen-subject test 上最终不如分流主线稳
+## 3.3 Spatial Cue Stream
 
-#### 作用
+当前主线显式使用的双耳 cue 包括：
 
-- 作为“单流早融合是否已经足够强”的关键对照
-- 用来证明后续的 content/cue 解耦不是建立在弱 baseline 上
+- `ILD`
+- `sin(IPD)`
+- `cos(IPD)`
+- `coherence`
 
-## 该继续挖掘 / 该保留 / 该停止
+这条 cue 流不是可有可无的附属分支，而是为了保留 DOA 任务最直接的空间信息来源。
 
-### 值得继续挖掘
+但项目不再采用重型 2D cue-CNN，而是采用更轻的处理顺序：
 
-- `dual cue value/reliability`
-  - 当前论文方法主线
-  - 已经有 3-seed 结果和完整 robustness 分析基础
-- `cf80_cue24_gru80`
-  - 当前 compact 主线
-  - 参数最省、稳定性最好，适合作为 compact variant
+1. **先频带压缩**
+2. **再时间建模**
 
-### 保留但不建议深挖
-
-- `encoder v2 balanced`
-  - 稳定参照线
-- `lite cue all`
-  - 强分类参照线
+原因是：
 
-### 作为 baseline / 对照保留
+- cue 在相邻频点上存在冗余
+- 逐频点 cue 在噪声/混响下波动较大
+- 先压成 band-level 表示后，时间模块看到的是更稳定的 cue 轨迹
 
-- `v7 early-fusion single-encoder baseline`
-  - 验证早融合是否足够强
-  - 结果证明：它是强 baseline，但在 unseen-subject test 上不如分流主线稳
-- `BiL-style GCC-PHAT CRN`
-  - 当前最有说服力的外部轻量深度 baseline
-- `FAViT-style ILD/IPD`
-  - 作为外部 Transformer baseline 保留，用于说明“显式 cue + Transformer”并不天然优于更贴近双耳定位结构的设计
-- `v5 enhanced + fbaux_only + cohfix`
-  - 原生重模型参照
-- `SDEL-DOA-Cls + fbaux`
-  - 当前外部最强分类 baseline
-
-### 可以停止深挖（单独归档）
-
-下面这些实验已经有结论，但不再作为主线推进对象：
-
-- 完整 cue-CNN concat
-  - 更重、更慢，结果没有超过主线
-- multi-scale temporal cue encoder
-  - 改动不大，但无一致收益
-- band-weighting / band-attention cue encoder
-  - `MAE / Acc@10 / large error` 明显变差
-- `dual cue + TF-mask`
-  - 时频 mask 没有带来收益，反而损伤泛化
-- `dual cue + reliability gate`
-  - 作为“更稳健的变体”有分析价值，但不替代 concat 主线
-- `dual cue + LSTM`
-  - 比 `GRU` 更重、更差
-- `dual cue + Mamba`
-  - 比 `GRU` 更重、更差，也没有比 `LSTM` 更好
-- 更重的 `v5` gate / cross-attention 变体
-  - 复杂度高，收益和复杂度不匹配
-
-## 数据集
-
-主用数据集根目录：
-
-- `data/librispeech_cipic_multisubject_robust50h_v1`
-
-关键设置：
-
-- 语音：`LibriSpeech/train-clean-100`
-- HRTF：`/disk2/bywang/data/HRTF/subject_*.sofa`
-- 噪声：`DEMAND`
-- 采样率：`16 kHz`
-- 单条音频长度：`10 s`
-- 训练片段长度：`2 s`
-- 总规模：`18,000` 条，约 `50 h`
-
-对应数据合成脚本：
-
-- `prepare_robust_multisubject_dataset.py`
-
-## 当前结果
-
-### 核心结果
-
-主结果表优先按 `Accuracy / F1 / Acc@5° / Acc@10° / MAE` 排列，方便和你当前论文主叙事保持一致。
-
-| 模型 | 配置 | Accuracy | F1-score | Acc@5° | Acc@10° | MAE | FB err | Opp err | Large err |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| 论文方法主线 `dual cue value/reliability (3-seed avg)` | `seed42 / seed43 / seed44` | 0.6838 | 0.3982 | 0.7616 | 0.8681 | 11.76° | 0.0886 | 0.0083 | 0.0646 |
-| 轻量 compact 主线 `cf80_cue24_gru80 (3-seed avg)` | `seed42 / seed43 / seed44` | 0.6772 | 0.3901 | 0.7498 | 0.8625 | 12.58° | 0.0896 | 0.0090 | 0.0698 |
-| 稳定参照线 `encoder v2 balanced` | `train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml` | 0.6644 | 0.3856 | 0.7526 | 0.8550 | 12.91° | 0.0916 | 0.0064 | 0.0731 |
-| 分类强参照线 `lite cue all` | `train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_nocsl_fbaux_cohfix.yaml` | 0.7133 | 0.4264 | 0.7800 | 0.8656 | 13.89° | 0.1078 | 0.0088 | 0.0821 |
-| 外部轻量 baseline `BiL-style GCC-PHAT CRN` | `train_librispeech_multisubject_robust50h_bilstyle_gccphat_crn72_nocsl.yaml` | 0.6962 | 0.4032 | 0.7621 | 0.8629 | 14.98° | 0.1029 | 0.0082 | 0.0892 |
-| 外部 Transformer baseline `FAViT-style ILD/IPD` | `train_librispeech_multisubject_robust50h_favitstyle_ildipd_nocsl_fbaux_cohfix.yaml` | 0.6162 | 0.3303 | 0.7002 | 0.8300 | 16.58° | 0.1164 | 0.0109 | - |
-| 内容-only baseline | `train_librispeech_multisubject_robust50h_v7_contentonly_cf80_gru80_nocsl_fbaux_cohfix.yaml` | 0.3062 | 0.1425 | 0.3642 | 0.5163 | 25.02° | 0.2241 | 0.0199 | 0.1383 |
-| Early-fusion baseline | `train_librispeech_multisubject_robust50h_v7_earlyfusion_all_cf80_gru80_nocsl_fbaux_cohfix.yaml` | 0.5944 | 0.3278 | 0.6664 | 0.8139 | 13.86° | 0.0877 | 0.0073 | - |
-| 原生重模型参照 `v5 + enhanced + fbaux_only + cohfix + no-csl` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml` | 0.6661 | 0.3828 | 0.7429 | 0.8720 | 11.92° | 0.0967 | 0.0089 | 0.0667 |
-| 纯回归参考 `DOA-Net pure-reg + fbaux` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml` | 0.4457 | 0.3196 | 0.7438 | 0.8834 | 11.01° | 0.0816 | 0.0063 | 0.0578 |
-
-### `unseen-noise` 附加鲁棒性结果
-
-为了把“噪声鲁棒性”说得更硬，额外生成了一个只改噪声场景、不改 subject / SNR / RT60 / 房间参数协议的 test-only set：
-
-- 数据集：
-  - `data/librispeech_cipic_multisubject_robust50h_v1/test_subjects_unseen_noiseheldout`
-- 特点：
-  - `subject unseen`
-  - `noise scenes unseen`
-  - 其余协议与原始 `test_subjects_unseen` 保持一致
-
-当前最关键的主线和外部 baseline 在 `unseen-noise` 上的结果如下：
-
-| 模型 | 评估配置 | Accuracy | F1-score | Acc@5° | Acc@10° | MAE | FB err | Opp err | Large err |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| 论文方法主线 `dual cue value/reliability` | `configs/eval_librispeech_multisubject_robust50h_v7_dualcue_vr_cf80_gru80_noiseheldout.yaml` | 0.6891 | 0.4101 | 0.7648 | 0.8611 | 12.10° | 0.0891 | 0.0124 | 0.0623 |
-| 轻量 compact 主线 `cf80_cue24_gru80` | `configs/eval_librispeech_multisubject_robust50h_v7_cf80_cue24_gru80_noiseheldout.yaml` | 0.6463 | 0.3714 | 0.7231 | 0.8419 | 13.32° | 0.0974 | 0.0091 | 0.0791 |
-| 外部轻量 baseline `BiL-style GCC-PHAT CRN` | `configs/eval_librispeech_multisubject_robust50h_bilstyle_gccphat_crn72_noiseheldout.yaml` | 0.6777 | 0.3929 | 0.7390 | 0.8487 | 16.17° | 0.1112 | 0.0112 | 0.0968 |
-| 外部 Transformer baseline `FAViT-style ILD/IPD` | `configs/eval_librispeech_multisubject_robust50h_favitstyle_ildipd_noiseheldout.yaml` | 0.6123 | 0.3274 | 0.6978 | 0.8351 | 16.32° | 0.1118 | 0.0090 | - |
-| Early-fusion baseline | `configs/eval_librispeech_multisubject_robust50h_v7_earlyfusion_all_cf80_gru80_noiseheldout.yaml` | 0.5968 | 0.3321 | 0.6697 | 0.8117 | 13.72° | 0.0882 | 0.0061 | 0.0756 |
-
-#### `unseen-noise` 结论
-
-- `dual cue value/reliability`
-  - 在 `noiseheldout` 条件下几乎没有掉点
-  - 说明显式 `value / reliability` 分解对未见噪声场景泛化非常稳
-- `cf80_cue24_gru80`
-  - 相比原始 seen-noise test 有明显下降
-  - 说明 compact 化会牺牲一部分未见噪声鲁棒性
-- `BiL-style GCC-PHAT CRN`
-  - 在 `Accuracy / F1 / Acc@5°` 上仍然是一个很强的外部 baseline
-  - 但 `MAE / front-back / large error` 明显落后于 `dual cue`，说明统一 GCC-PHAT CRN 更容易被少量前后混淆样本拉高尾部误差
-- `FAViT-style ILD/IPD`
-  - 说明频率优先 patch Transformer 并没有自然带来更强的双耳定位泛化
-  - 在当前协议下整体弱于 `BiL-style` 和当前分流主线
-- `early-fusion`
-  - 仍然是一个有竞争力的 baseline
-  - 但在 unseen-noise 条件下仍明显落后于 `dual cue`
-
-### 已验证但不继续推进的变体
-
-这些模型已经给出明确结论，但不再作为主线推进对象。保留在 README 里，是为了后面写论文时能快速引用负结果。
-
-| 变体 | 结论 | 代表结果 |
-|---|---|---|
-| `dual cue + reliability gate` | 更保守、更稳健，但分类锐度下降；适合作为分析性变体，不替代主线 | `Acc 0.6642 / F1 0.3785 / Acc@10 0.8828 / MAE 11.44°` |
-| `dual cue + TF-mask` | cue-side 时频 mask 没带来收益，整体落后于 concat 主线 | `Acc 0.6477 / F1 0.3755 / Acc@10 0.8374 / MAE 13.16°` |
-| `dual cue + LSTM` | 更重、更差，不如当前 GRU | `Acc 0.6474 / F1 0.3700 / Acc@10 0.8438 / MAE 13.30°` |
-| `dual cue + Mamba` | 更重、更差，不如当前 GRU，也没有优于 LSTM | `Acc 0.6468 / F1 0.3664 / Acc@10 0.8374 / MAE 13.31°` |
-| `multi-scale temporal cue` | 改动不大，但无一致收益 | `Acc 0.6699 / F1 0.3897 / Acc@10 0.8552 / MAE 12.51°` |
-| `band-weighting / band-attention cue` | 结构更花，但 `MAE / front-back / large error` 明显变差 | `Acc 0.6602 / F1 0.4003 / Acc@10 0.8118 / MAE 17.07°` |
-| `DOA-Net cls + reg + fbaux` | `train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml` | 0.6640 | 0.3772 | 12.40° | 0.7380 | 0.8609 | 0.0892 | 0.0057 | 0.0679 |
-| `SDEL-DOA-Reg` | `train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml` | 0.4112 | 0.3202 | **7.42°** | 0.7780 | 0.9246 | 0.0428 | 0.0022 | 0.0316 |
-| `SDEL-DOA-Cls` | `train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml` | 0.6910 | 0.3897 | 12.77° | 0.7514 | 0.8843 | 0.0704 | 0.0118 | 0.0620 |
-| `SDEL-DOA-Cls + fbaux` | `train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml` | **0.7201** | **0.4127** | **9.02°** | **0.8032** | **0.9221** | **0.0422** | 0.0053 | **0.0381** |
-
-### 当前结论
-
-- `front/back auxiliary head` 仍然是最稳定、最有迁移性的改动。
-- `coherence` 修正后，原生主线在 unseen-subject test 上更稳。
-- 在原生 backbone 上：
-  - `no-csl + fbaux_only + cohfix` 是当前最均衡的分类主线。
-  - `v7 + encoder v2 balanced` 是当前更推荐的轻量 `MAE` 主线；相比原始 `v7 native_lite`，`F1 / MAE / Acc@5° / Acc@10°` 全部提升。
-  - `v7 + lite cue encoder all` 是当前更强的轻量分类主线；`Accuracy / F1 / Acc@5° / Acc@10°` 全部高于 `encoder v2 balanced`，但 `MAE` 更差，且 `front/back` 与 `large error` 更高。
-  - `v7 + lite cue + cf80 + cue24 + gru80` 是当前更稳的轻量候选主线；它比 `encoder v2 balanced` 参数更少，并在三次 seed 下都保持了稳定、且有竞争力的 `Acc / F1 / MAE / Acc@10°`。
-  - `v7 + dual cue value/reliability + cf80 + gru80` 是当前更适合作为论文方法主线的版本；它把 `ILD/sin(IPD)/cos(IPD)` 和 `coherence` 显式拆成 value / reliability 两支，在三次 seed 平均下取得了比 `cf80_cue24_gru80` 略优的综合结果。
-  - 单流早融合 baseline 在验证阶段表现很好，但在 unseen-subject 测试集上最终明显落后于当前分流主线；这说明早融合可以形成强 baseline，但 content/cue 解耦对跨 subject 泛化更有优势。
-  - 在轻量 cue 独立流上，`coherence` 不是冗余项；去掉 `coherence` 的 `ild_phase` 版本没有超过 `encoder v2 balanced`。
-  - 在 lite cue 独立流上，`temporal conv` 不是冗余项；改成 `MLP-only` 会明显削弱分类表现。
-  - `absdiff` 更偏向帮助分类锐度，而不是帮助 `MAE`；去掉后 `Acc / F1 / Acc@5° / Acc@10°` 会掉，但 `MAE` 和尾部错误会更保守。
-  - 多尺度 temporal cue encoder 与 band-weighting cue encoder 都没有稳定超过当前主线；前者收益有限，后者在 `MAE / Acc@5° / Acc@10° / front-back error` 上明显变差。
-  - 纯回归进一步降低 `MAE` 和结构性大错，但分类指标明显下降。
-  - 分类 + 回归联合没有超过当前原生分类主线。
-- 在外部 backbone 上：
-  - `SDEL-DOA-Cls + fbaux` 是当前最强分类结果。
-  - `SDEL-DOA-Reg` 的 `MAE` 最低，仍值得继续做 `+ fbaux` 或联合任务验证。
-  - `BiL-style GCC-PHAT CRN` 是当前最强、最贴题的外部轻量 baseline；它在 `Accuracy / F1 / Acc@5°` 上已经接近甚至局部超过 `dual cue`，但 `MAE / front-back / large error` 明显更差，说明显式 `value / reliability` 分解更有利于控制结构性大错。
-  - `FAViT-style ILD/IPD` 作为外部 Transformer baseline 没有超过 `BiL-style`，也没有接近当前主线；这说明在当前 `360° / 72类 / unseen-subject / unseen-noise` 协议下，频率优先 patch Transformer 并不会自然优于更贴近双耳定位物理结构的 GCC-PHAT 或显式 cue 分流建模。
-
-## 当前代码结构
-
-主模型链路：
-
-```text
-立体声 WAV
-  -> STFT 特征提取
-  -> (log_mag_L, log_mag_R, IPD, ILD, sin/cos(IPD), coherence)
-  -> 共享编码器 / 或 native_lite_v7 内容流
-  -> 双耳交互与时序建模
-  -> DOA 分类 / 回归头
-  -> 可选 front/back 辅助头
-```
-
-关键实现文件：
-
-- 特征：
-  - `dataset/feature_extractor.py`
-  - `dataset/static_dataset.py`
-- 原生主线：
-  - `models/binaural_doa_net.py`
-  - `models/encoder.py`
-  - `models/difference_prior.py`
-  - `models/cross_attention.py`
-  - `models/gating.py`
-  - `models/temporal_head.py`
-- 轻量支线：
-  - `models/native_lite_v7.py`
-- 外部 baseline：
-  - `models/sdel_crnn_baseline.py`
-- 训练与评估：
-  - `train.py`
-  - `evaluate.py`
-  - `engine/trainer.py`
-  - `engine/evaluator.py`
-  - `losses.py`
-  - `metrics.py`
-
-## EncoderV2 结构
-
-当前轻量 `v7` 推荐配置使用的是：
-
-- `models/encoder.py` 中的 `BinauralEncoderV2Balanced`
-- 对应配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml`
-
-它的设计目标不是单纯“多堆几层卷积”，而是让前端在沿频率轴压缩之前，先完成一轮更充分的局部时频建模，从而提升抗噪和抗混响能力，同时保持轻量。
-
-### 输入输出
-
-- 输入：
-  - 单耳内容谱图 `x ∈ [B, 1, T, F]`
-  - 左右耳共用同一个 encoder 实例（共享权重）
-- 输出：
-  - 单耳时序特征 `h ∈ [B, T, D]`
-  - 默认 `D = 96`
-
-在 `native_lite_v7` 中：
-
-- 左耳 `log_mag_L` 经过 encoder 得到 `F_L`
-- 右耳 `log_mag_R` 经过同一个 encoder 得到 `F_R`
-- 再与 `ILD / sin(IPD) / cos(IPD) / coherence` 形成的 cue stream 融合
-
-### 结构概览
-
-`EncoderV2Balanced` 默认通道配置为：
-
-- `encoder_channels = [24, 40, 64]`
-- `encoder_out_dim = 96`
-
-整体结构是：
-
-```text
-[Balanced Stage 1] 1   -> 24
-[Balanced Stage 2] 24  -> 40
-[Balanced Stage 3] 40  -> 64
--> AdaptiveAvgPool2d((None, 1))
--> Linear(64 -> 96)
-```
-
-每个 `Balanced Stage` 都由两步组成：
-
-1. `pre_conv`
-   - `Conv2d(3x3, stride=(1,1), padding=1)`
-   - `BatchNorm2d`
-   - `ReLU`
-
-2. `downsample`
-   - `Depthwise Conv2d(3x3, stride=(1,2), padding=1, groups=C)`
-   - `Pointwise Conv2d(1x1)`
-   - `BatchNorm2d`
-   - `ReLU`
-   - `Dropout2d`
-
-也就是说，每个 stage 都遵循：
-
-```text
-先提局部特征 -> 再沿频率轴下采样
-```
-
-而不是旧版 encoder 那种：
-
-```text
-单层 stride=(1,2) 卷积直接边提特征边下采样
-```
-
-### 三个 stage 的具体写法
-
-默认 `v7 encoder v2 balanced` 的 3 个 stage 可以写成：
-
-```text
-Stage 1
-  Conv3x3, 1  -> 24, stride=(1,1)
-  DWConv3x3, 24 -> 24, stride=(1,2)
-  PWConv1x1, 24 -> 24
-
-Stage 2
-  Conv3x3, 24 -> 40, stride=(1,1)
-  DWConv3x3, 40 -> 40, stride=(1,2)
-  PWConv1x1, 40 -> 40
-
-Stage 3
-  Conv3x3, 40 -> 64, stride=(1,1)
-  DWConv3x3, 64 -> 64, stride=(1,2)
-  PWConv1x1, 64 -> 64
-
-Tail
-  AdaptiveAvgPool2d((None, 1))
-  Linear(64 -> 96)
-```
-
-性质上：
-
-- 时间维基本不压缩
-- 频率维每个 stage 压一半
-- depthwise separable 部分控制了参数量
-
-### 和旧版 encoder 的区别
-
-旧版 `BinauralEncoder` 是：
-
-```text
-[Conv3x3 stride=(1,2) + BN + ReLU + Dropout] x 3
--> freq pool
--> linear
-```
-
-新版 `BinauralEncoderV2Balanced` 是：
-
-```text
-[(Conv3x3 stride=1) + (DWConv3x3 stride=(1,2) + PWConv1x1)] x 3
--> freq pool
--> linear
-```
-
-区别主要有三点：
-
-1. 旧版是一层卷积直接下采样；新版先提特征、再下采样。
-2. 新版的下采样层用 depthwise separable conv，参数更省。
-3. 新版通道数更克制：`[24, 40, 64]`，不是 `v7` 旧版的 `[24, 48, 96]`。
-
-## LiteCueEncoder-A 结构
-
-当前轻量 cue 独立流主线使用的是：
-
-- `models/native_lite_v7.py` 中的 `NativeLiteLiteCueConcatDOANet`
-- 对应配置：
-  - `configs/train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_nocsl_fbaux_cohfix.yaml`
-
-它的目标不是复制一条完整的 2D cue-CNN，而是让 cue 流保留独立身份，同时把计算量控制在比较克制的范围内。
-
-### 核心思路
-
-```text
-内容流:
-  log_mag_L / log_mag_R
-  -> shared EncoderV2Balanced
-  -> mean / diff / absdiff
-  -> content_fusion(288 -> 96)
-
-cue 流:
-  [ILD, sin(IPD), cos(IPD), coherence]
-  -> band pooling (F -> 16)
-  -> temporal Conv1d
-  -> cue_feat(32)
-
-融合:
-  concat([content_feat(96), cue_feat(32)])
-  -> fused_feat(128)
-  -> BiGRU + attention pooling
-  -> classifier + front/back auxiliary head
-```
+这也是当前模型保持低复杂度的重要来源之一。
 
-### 为什么要单独做 LiteCueEncoder
+---
 
-上一版完整 `cue encoder + concat` 在 `T x F` 大图上跑了额外 2D CNN，结果是：
+## 3.4 Dual-Cue 设计：Value / Reliability 分离
 
-- 训练更慢
-- 参数更少但计算并不划算
-- 最终效果明显不如 `encoder v2 balanced`
+这是当前 `dualcue` 主线最重要的模型思想。
 
-`LiteCueEncoder-A` 改成：
+它把 cue 分成两类：
 
-- 先沿频率维做压缩
-- 再只在时间维做轻量 1D 卷积
+### Value branch
 
-这样做的直觉是：
+输入：
 
-- cue 本来就是高度结构化的空间线索
-- 不必复制一条重型内容 encoder
-- 先压缩频率维，再做局部时序提纯，更符合 cue 的信息性质
+- `ILD`
+- `sin(IPD)`
+- `cos(IPD)`
 
-### 参数量与计算量
+作用：
 
-`encoder v2 balanced`：
+- 编码方向线索本身
 
-- 参数量：`297,667`
-- 参数存储（FP32）：`1.136 MB`
-- checkpoint 大小：约 `3.5 MB`
-- MACs：`1.315 G`
-- 估算 FLOPs：`2.631 G`
-
-`lite cue encoder all`：
+### Reliability branch
 
-- 参数量：`251,795`
-- 参数存储（FP32）：`0.961 MB`
-- checkpoint 大小：约 `3.0 MB`
-- MACs：`1.306 G`
-- 估算 FLOPs：`2.612 G`
-
-`lite cue encoder all + cf80 + cue24 + gru80`：
-
-- 参数量：`196,987`
-- 参数存储（FP32）：`0.751 MB`
-- GRU 输入维度：`104`
-- 说明：
-  - `content_fusion_dim: 80`
-  - `cue_encoder_out_dim: 24`
-  - `gru_hidden_size: 80`
-
-### 和 `encoder v2 balanced` 的关系
-
-`encoder v2 balanced` 更像：
-
-- `MAE` 更优
-- `front/back` 和 `large error` 控制更稳
-
-`lite cue encoder all` 更像：
-
-- `Accuracy / F1 / Acc@5° / Acc@10°` 更强
-- 参数量更小
-- 但尾部大错更重，导致 `MAE` 没赢
-
-当前仓库里，这三条线的定位可以理解为：
-
-- `encoder v2 balanced`：轻量 `MAE` 主线 / 稳定参照
-- `lite cue encoder all`：轻量分类 / 近邻命中主线
-- `lite cue encoder all + cf80 + cue24 + gru80`：当前更均衡、最值得继续推进的轻量候选主线 / 当前推荐轻量主线
-
-### 参数量与收益
-
-在当前 `native_lite_v7` 主线里：
-
-- 原始 `v7` 总参数量：`313,083`
-- `encoder v2 balanced` 总参数量：`297,667`
-
-也就是说，这次改动并不是“更重换更好”，而是：
-
-- 参数量略降
-- `F1 / MAE / Acc@5° / Acc@10°` 同时提升
-
-在 unseen-subject test 上，相比原始 `v7 native_lite`：
-
-- `F1`: `0.3570 -> 0.3856`
-- `MAE`: `14.45° -> 12.91°`
-- `Acc@5°`: `0.7298 -> 0.7526`
-- `Acc@10°`: `0.8441 -> 0.8550`
-
-### 为什么它更适合轻量鲁棒主线
-
-这版 encoder 更适合当前目标“轻量化 + 抗噪 + 抗混响”的原因是：
-
-- 它保留了 `native_lite_v7` 的轻量时序头和 cue stream 设计
-- 只在内容编码前端做增强，不破坏整体主线结构
-- 先做局部建模再压频率轴，更符合 noisy / reverberant 条件下的表征需求
-- 用 depthwise separable conv 控制新增复杂度
-
-如果后续继续做轻量化实验，当前最自然的出发点已经从 `encoder v2 balanced` 转到：
-
-- `v7_litecueenc_concat_all_cf80_cue24_gru80`
-
-因为这条线已经证明：
-
-- 独立 cue 流是有效的
-- `coherence` 和 `temporal conv` 值得保留
-- 从特征提取和融合层减小 GRU 负担是有效方向
-
-## 当前保留的配置
-
-主线与强 baseline：
-
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml`
-- `configs/train_librispeech_multisubject_robust50h_sdel_doa_reg_baseline.yaml`
-- `configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_baseline.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml`
-
-历史对照与消融：
-
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_gru96.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_lite.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbaux_only_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_enhanced_fbfocus_only.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_csl_nols_enhanced_fbaux_only_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_nols_enhanced_fbaux_only_cohfix.yaml`
-
-轻量 native 支线：
-
-- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_xattn_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_gru96_attnpool_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_gru96_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v6_native_simple_gru96_xattn_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_xear_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_complexri_contentonly_nocsl_fbaux_cohfix.yaml`
-- `configs/train_librispeech_multisubject_robust50h_v7_native_lite_complexri_phasecue_nocsl_fbaux_cohfix.yaml`
-
-## 快速开始
-
-安装依赖：
-
-```bash
-pip install -r requirements.txt
-```
-
-训练当前原生主线：
+输入：
+
+- `coherence`
+
+作用：
+
+- 编码这些方向线索当前是否可信
+
+这一步的动机很直接：
+
+> 在复杂声学条件下，模型不应该只问“cue 是多少”，还应该问“这个 cue 值不值得信”。
+
+这使得模型在 diffuse noise 和混响条件下更有鲁棒性解释。
+
+---
+
+## 3.5 Temporal Aggregation
+
+content 与 cue 融合后，当前主线使用轻量时序聚合头（以 `GRU` 为主）整合多帧证据。
+
+这里的关键不是“时序头很强”，而是：
+
+- 前端已经把共享内容、双耳差异和 cue 可靠性整理成较干净的低维表示
+- 因此后端不需要像重型时频序列模型那样在完整 `T x F` 网格上反复做昂贵建模
+
+这也是当前 `v7` 和 `FN-SSL` 的重要区别之一。
+
+---
+
+## 3.6 Front/Back Auxiliary
+
+当前多条主线都保留了轻量 `front/back auxiliary head`。
+
+它的作用不是引入新任务，而是帮助缓解双耳定位中的典型歧义：
+
+- front/back confusion
+
+但从当前实验看，这个辅助头**并不是所有模型都同样受益**：
+
+- 在 `v7` 主线中，它仍然可以作为有意义的训练约束
+- 但在 `SDEL`、`FN-SSL` 这类外部 baseline 中，开关辅助头带来的收益并不稳定
+
+因此当前更严谨的说法是：
+
+> `front/back auxiliary` 是一个**可选正则项**，可以作为消融因素单独检验，
+> 但不能把外部 baseline 的强结果简单归因于它。
+
+---
+
+## 4. 当前重点模型
+
+### 4.1 `v7_dualcue_liteenc_v1`
+
+这是当前论文主模型：共享轻量内容编码器、`mean/diff/absdiff` 双耳关系表示、cue value/reliability 双分支，以及紧凑 BiGRU 时序头。模型参数量为 `152,803`。
+
+### 4.2 `rawconcat_controlled`
+
+该受控变体只把内容关系从 `mean/diff/absdiff` 改为 `concat(F_L, F_R)`，其余宽度和训练协议保持一致。它用于检验显式关系分解，而不是作为独立主模型。参数量为 `147,683`。
+
+---
+
+## 5. 当前外部 baseline
+
+主表保留 `SDEL`、`FN-SSL`、`DP-RTF` 和 `BiL`。所有正式比较都使用相同的官方验证集、官方测试集、72 类角度定义和 grouped 评测脚本。FN-SSL 与 BiL 当前各有一个完整 seed；SDEL、DP-RTF 各有三个 seed。
+
+---
+
+## 6. 官方测试结果
+
+以下结果最后核验于 `2026-07-24`。论文口径排除 clean，统计 `10/5/0/-5/-10 dB` 共 `6480` 个样本。模型均使用验证集 MAE 最优的 `best.pth`，没有按测试集挑 checkpoint。
+
+### 6.1 固定 seed43
+
+| 模型 | Params | Acc (%) | MAE (deg) | Acc@5 (%) | Acc@10 (%) |
+|---|---:|---:|---:|---:|---:|
+| `FN-SSL` | 658,890 | **96.590** | **2.231** | **98.164** | **98.287** |
+| `v7_dualcue_liteenc_v1` | **152,803** | 96.559 | 2.590 | 97.855 | 97.886 |
+| `SDEL` | 925,834 | 96.543 | 2.796 | 97.762 | 97.901 |
+| `rawconcat_controlled` | 147,683 | 95.139 | 3.566 | 96.867 | 96.960 |
+| `DP-RTF` | 876,608 | 94.938 | 4.678 | 96.543 | 96.682 |
+| `BiL` | 865,228 | 94.352 | 5.136 | 95.849 | 96.049 |
+
+固定 seed43 下，主模型与 FN-SSL 的 Accuracy 相差 `0.031 pp`，与 SDEL 相差 `0.015 pp`。这些差异只有 1-2 个样本，尚未做配对显著性检验，不能解释为统计显著领先。
+
+### 6.2 多 seed 稳定性
+
+| 模型 | Seeds | Acc mean +/- std (%) | MAE mean +/- std (deg) |
+|---|---:|---:|---:|
+| `SDEL` | 3 | **96.713 +/- 0.157** | **2.655 +/- 0.126** |
+| `v7_dualcue_liteenc_v1` | 3 | 96.085 +/- 0.420 | 2.875 +/- 0.257 |
+| `rawconcat_controlled` | 3 | 95.983 +/- 0.750 | 2.852 +/- 0.619 |
+| `DP-RTF` | 3 | 95.453 +/- 0.489 | 4.389 +/- 0.251 |
+
+FN-SSL 和 BiL 只有一个完整 seed，因此不在该表中报告伪造的标准差。
+
+---
+
+## 7. 分 SNR 结果
+
+下表固定 seed43，每格为 `Acc (%) / MAE (deg)`：
+
+| 模型 | 10 dB | 5 dB | 0 dB | -5 dB | -10 dB |
+|---|---:|---:|---:|---:|---:|
+| `v7_dualcue_liteenc_v1` | 99.07/0.76 | **98.77/0.95** | **98.30/1.22** | 94.68/4.09 | 91.98/5.93 |
+| `FN-SSL` | 98.77/1.08 | 98.30/1.17 | 97.76/1.64 | **95.68/1.96** | **92.44/5.31** |
+| `SDEL` | **99.15/1.25** | 98.53/1.37 | 97.76/2.26 | 95.52/3.01 | 91.74/6.09 |
+| `rawconcat_controlled` | 98.61/1.15 | 98.15/1.27 | 96.99/2.09 | 93.06/5.16 | 88.89/8.16 |
+| `DP-RTF` | 98.38/2.21 | 97.61/3.37 | 95.83/4.51 | 93.29/6.02 | 89.58/7.28 |
+| `BiL` | 98.15/2.57 | 97.53/2.54 | 95.91/3.67 | 93.13/6.08 | 87.04/10.82 |
+
+主模型的优势集中在 `0 dB` 及以上；FN-SSL 在 `-5/-10 dB` 更强。论文因此将结论限定为“轻量模型在中高 SNR 接近或达到更大基线”，不声称所有噪声条件全面领先。
+
+---
+
+## 8. 受控消融
+
+以下为 seed42 noisy-only 结果：
+
+| 变体 | Acc (%) | MAE (deg) | Delta Acc | Delta MAE |
+|---|---:|---:|---:|---:|
+| 主模型 | 95.756 | 2.945 | - | - |
+| `w/o reliability` | 95.694 | 3.120 | -0.062 pp | +0.175 |
+| `w/o content` | 94.907 | 3.847 | -0.849 pp | +0.902 |
+| `merged cue` | 96.003 | 3.069 | +0.247 pp | +0.124 |
+| `rawconcat_controlled` | 96.235 | 2.463 | +0.478 pp | -0.482 |
+
+当前证据支持 content 分支的重要性；reliability 分支的主要收益体现在 MAE。`merged cue` 呈现 Accuracy/MAE 权衡。Rawconcat 在 seed42、44 更好，但 seed43 明显退化；三 seed 平均 Accuracy 比主模型低 `0.103 pp`，且方差更大。因此 `mean/diff/absdiff` 只作为低成本关系归纳偏置，不作为已经被证明独立提升精度的核心创新点。
+
+---
+
+## 9. 参数量与复杂度
+
+| 模型 | Params (M) | FLOPs (G) |
+|---|---:|---:|
+| `v7_dualcue_liteenc_v1` | **0.153** | **0.391** |
+| `FN-SSL` | 0.659 | 65.687 |
+| `SDEL` | 0.926 | 1.402 |
+| `DP-RTF` | 0.877 | 8.215 |
+| `BiL` | 0.865 | 3.117 |
+
+主模型参数量约为 FN-SSL 的 `1/4.3`、SDEL 的 `1/6.1`。轻量化来自前端的频率压缩和低维关系/cue 表示，而不是在完整时频平面上堆叠序列模块。
+
+---
+
+## 10. 结论与限制
+
+当前可复现结论是：
+
+1. content 上下文是性能最关键的组成部分。
+2. value/reliability 分支提供了可解释的 cue 组织方式，移除 reliability 会增加 MAE。
+3. 主模型在 152.8K 参数下，固定 seed43 的 noisy-only Accuracy 与 FN-SSL、SDEL 接近。
+4. 低 SNR 仍是主要缺口，FN-SSL 在 `-5/-10 dB` 表现更强。
+5. Rawconcat 的结果否定了“显式 `mean/diff/absdiff` 必然更准”的强结论；当前只能观察到主模型的跨 seed 方差较小。
+
+由于已经进行过多轮结构探索，测试集结果不得继续用于选择主结构。后续论文结论需要补充预先固定规则下的额外 seed 或配对 bootstrap，当前 README 不声称统计显著性。
+
+---
+
+## 11. 当前推荐训练与评测入口
+
+训练官方划分的 `v7_dualcue_liteenc_v1` seed43：
 
 ```bash
 python train.py \
-  --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml
+  --config configs/train_kemar_v7_dualcue_liteenc_v1_diffusefg_officialsplit_seed43_g5.yaml
 ```
 
-训练当前轻量 `v7` 主线：
+训练受控 Rawconcat seed43：
 
 ```bash
 python train.py \
-  --config configs/train_librispeech_multisubject_robust50h_v7_native_lite_encoderv2_balanced_nocsl_fbaux_cohfix.yaml
+  --config configs/train_kemar_v7_dualcue_liteenc_v1_diffusefg_rawconcat_controlled_officialsplit_seed43_g5.yaml
 ```
 
-训练当前推荐的轻量候选主线：
+评测 grouped 结果：
 
 ```bash
-python train.py \
-  --config configs/train_librispeech_multisubject_robust50h_v7_litecueenc_concat_all_cf80_cue24_gru80_nocsl_fbaux_cohfix.yaml
+python tools/evaluate_kemar_grouped.py \
+  --config configs/train_kemar_v7_dualcue_liteenc_v1_diffusefg_officialsplit_seed43_g5.yaml \
+  --checkpoint outputs/checkpoints_kemar_v7_dualcue_liteenc_v1_diffusefg_officialsplit_seed43_g5/best.pth \
+  --test_root data/kemar_sofamyroom_diffusefg_static_v1_test_officialsplit/test \
+  --output_dir outputs/grouped_eval_runs_officialsplit_retrained/main_seed43 \
+  --device cuda:0 \
+  --num_workers 4
 ```
 
-评估当前原生主线：
+生成论文汇总表：
 
 ```bash
-python evaluate.py \
-  --checkpoint outputs/checkpoints_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix/best.pth \
-  --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix.yaml \
-  --output.log_dir outputs/logs_multisubject_robust50h_v5_bias_gating_attnpool_nocsl_enhanced_fbaux_only_cohfix_test_best_workers4
+python tools/summarize_officialsplit_retrained.py
 ```
 
-训练 SDEL baseline：
+---
 
-```bash
-python train.py \
-  --config configs/train_librispeech_multisubject_robust50h_sdel_doa_cls_fbaux.yaml
-```
-
-训练原生联合回归：
-
-```bash
-python train.py \
-  --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_reg_enhanced_fbaux_only_cohfix.yaml
-```
-
-训练原生纯回归：
-
-```bash
-python train.py \
-  --config configs/train_librispeech_multisubject_robust50h_v5_bias_gating_attnpool_pure_reg_enhanced_fbaux_only_cohfix.yaml
-```
-
-## 可用工具
-
-当前仍保留的训练/实验工具：
-
-- `tools/run_training_tmux.sh`
-- `tools/run_training_background.sh`
-- `tools/run_fbaux_weight_sweep.sh`
-- `tools/run_fbaux_weight_sweep_sequential.sh`
-- `tools/run_cohfix_softlabel_ablation_sequential.sh`
-- `tools/run_binmov2023_static_compare.sh`
-- `tools/monitor_training.sh`
-- `tools/diagnostics/analyze_multisubject_checkpoint.py`
-
-## 项目结构
+## 12. 当前代码结构
 
 ```text
 DOA-net/
 ├── README.md
 ├── train.py
 ├── evaluate.py
-├── infer.py
 ├── losses.py
 ├── metrics.py
-├── prepare_robust_multisubject_dataset.py
 ├── configs/
 ├── dataset/
 ├── engine/
@@ -1123,8 +701,26 @@ DOA-net/
 └── outputs/
 ```
 
-## 备注
+关键文件：
 
-- 当前工作树已经清理掉大部分 `subject003` 历史文件和对应输出。
-- README 只描述当前仍保留在仓库中的配置、脚本和结果目录。
-- 若后续继续精简 `configs/` 或 `outputs/`，建议同步更新这里的“当前保留的配置”部分。
+- 数据与特征：
+  - `dataset/static_dataset.py`
+  - `dataset/feature_extractor.py`
+- 主模型：
+  - `models/native_lite_v7.py`
+  - `models/encoder.py`
+  - `models/temporal_head.py`
+- baseline：
+  - `models/sdel_crnn_baseline.py`
+  - `models/fn_ssl_baseline.py`
+- 训练与评测：
+  - `train.py`
+  - `tools/evaluate_kemar_grouped.py`
+
+---
+
+## 13. 当前一句话总结
+
+当前项目最清晰的结论是：
+
+> **在 KEMAR + SofaMyRoom 静态双耳渲染与 diffusefg 扩散噪声测试协议下，基于共享内容上下文、显式双耳关系分解以及 cue value/reliability 分离建模的轻量 `v7` 主线，已经在性能、误差控制和复杂度之间形成了有竞争力的平衡。**

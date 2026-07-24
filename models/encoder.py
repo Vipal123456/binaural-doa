@@ -165,3 +165,136 @@ class BinauralEncoderV2Balanced(nn.Module):
         h = h.permute(0, 2, 1)
         h = self.proj(h)
         return h
+
+
+class _LiteContentEncoderStage(nn.Module):
+    """更偏算力友好的轻量 stage。
+
+    结构：
+      1. 1x1 pointwise 先调通道
+      2. 3x3 depthwise 做局部建模
+      3. 1x3 depthwise + stride(1,2) 压缩频率轴
+      4. 1x1 pointwise 输出目标通道
+
+    相比 BalancedEncoderStage，避免了高分辨率上的完整常规 3x3 卷积。
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, dropout: float):
+        super().__init__()
+        mid_channels = max(out_channels, in_channels)
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, mid_channels, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                mid_channels,
+                mid_channels,
+                kernel_size=(3, 3),
+                stride=(1, 1),
+                padding=(1, 1),
+                groups=mid_channels,
+                bias=False,
+            ),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                mid_channels,
+                mid_channels,
+                kernel_size=(1, 3),
+                stride=(1, 2),
+                padding=(0, 1),
+                groups=mid_channels,
+                bias=False,
+            ),
+            nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.block(x)
+
+
+class LightContentEncoderV1(nn.Module):
+    """专门为降低 content 分支 FLOPs 设计的轻量 encoder。"""
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        channels: List[int] = None,
+        out_dim: int = 64,
+        dropout: float = 0.2,
+    ):
+        super().__init__()
+        if channels is None:
+            channels = [16, 24, 32]
+
+        blocks = []
+        ch_in = in_channels
+        for ch_out in channels:
+            blocks.append(_LiteContentEncoderStage(ch_in, ch_out, dropout))
+            ch_in = ch_out
+
+        self.conv_blocks = nn.Sequential(*blocks)
+        self.freq_pool = nn.AdaptiveAvgPool2d((None, 1))
+        self.proj = nn.Linear(channels[-1], out_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.conv_blocks(x)
+        h = self.freq_pool(h)
+        h = h.squeeze(-1)
+        h = h.permute(0, 2, 1)
+        h = self.proj(h)
+        return h
+
+
+class BandwiseBinauralEncoderV2(nn.Module):
+    """按频带拆分后编码，再做跨带融合的内容 encoder。
+
+    这版只替换 content encoder，不改后续时序头和 cue 分支。
+    设计重点是保留不同频带中的双耳内容差异，让 encoder 本身
+    不再对整个频轴做一刀切的统一卷积压缩。
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        channels: List[int] = None,
+        out_dim: int = 128,
+        dropout: float = 0.2,
+        num_bands: int = 4,
+        band_out_dim: int = 24,
+    ):
+        super().__init__()
+        if channels is None:
+            channels = [24, 40, 64]
+        if num_bands < 1:
+            raise ValueError(f"num_bands must be >= 1, got {num_bands}")
+        if band_out_dim < 1:
+            raise ValueError(f"band_out_dim must be >= 1, got {band_out_dim}")
+
+        self.num_bands = num_bands
+        self.band_encoder = BinauralEncoderV2Balanced(
+            in_channels=in_channels,
+            channels=channels,
+            out_dim=band_out_dim,
+            dropout=dropout,
+        )
+        fused_band_dim = num_bands * band_out_dim
+        self.cross_band_fusion = nn.Sequential(
+            nn.Linear(fused_band_dim, out_dim),
+            nn.LayerNorm(out_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, C, T, F]
+        band_slices = torch.chunk(x, self.num_bands, dim=-1)
+        band_feats = [self.band_encoder(band_x) for band_x in band_slices]
+        fused = torch.cat(band_feats, dim=-1)
+        fused = self.cross_band_fusion(fused)
+        return fused

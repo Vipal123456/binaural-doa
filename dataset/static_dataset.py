@@ -10,6 +10,8 @@ import glob
 import warnings
 import math
 import pickle
+import csv
+import hashlib
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any
@@ -37,6 +39,7 @@ class StaticRecording:
     audio_path: str
     metadata_path: str
     file_id: str  # e.g., "0001"
+    azimuth_deg: Optional[float] = None
 
 
 class StaticDOADataset(Dataset):
@@ -91,6 +94,9 @@ class StaticDOADataset(Dataset):
         azimuth_coordinate_order: str = "xy",
         segment_hop_seconds: Optional[float] = None,
         max_segments_per_recording: Optional[int] = None,
+        include_waveform: bool = False,
+        feature_cache_enabled: bool = False,
+        feature_cache_dir: Optional[str] = None,
         logger: Optional[Any] = None,
     ):
         self.root_dir = root_dir
@@ -116,6 +122,9 @@ class StaticDOADataset(Dataset):
         self.max_segments_per_recording = (
             int(max_segments_per_recording) if max_segments_per_recording is not None else None
         )
+        self.include_waveform = bool(include_waveform)
+        self.feature_cache_enabled = bool(feature_cache_enabled)
+        self.feature_cache_dir = feature_cache_dir
         self.logger = logger
 
         # 计算方位角分辨率
@@ -129,6 +138,8 @@ class StaticDOADataset(Dataset):
             win_length=win_length,
             window=window,
         )
+        self._cache_warning_emitted = False
+        self._feature_cache_root = self._init_feature_cache_root()
 
         self.recordings: List[StaticRecording] = []
         self.segments: List[Dict[str, Any]] = []
@@ -157,17 +168,76 @@ class StaticDOADataset(Dataset):
             f"{self.split}_sr{self.target_sr}_seg{seg_ms}ms_"
             f"cls{self.num_classes}_az{az_min}_{az_max}_seed{self.split_seed}.pkl"
         )
+        hop_ms = int(round(self.segment_hop_seconds * 1000.0))
+        maxseg_tag = (
+            f"maxseg{self.max_segments_per_recording}"
+            if self.max_segments_per_recording is not None
+            else "maxsegall"
+        )
+        filename = filename.replace(".pkl", f"_hop{hop_ms}ms_{maxseg_tag}.pkl")
         if self.split_strategy != "ratio":
             strategy_tag = self.split_strategy
             if self.split_folds:
                 strategy_tag += "_f" + "-".join(str(f) for f in self.split_folds)
-            hop_ms = int(round(self.segment_hop_seconds * 1000.0))
-            filename = filename.replace(".pkl", f"_{strategy_tag}_hop{hop_ms}ms.pkl")
+            filename = filename.replace(".pkl", f"_{strategy_tag}.pkl")
         return os.path.join(cache_dir, filename)
 
     def _log(self, message: str) -> None:
         if self.logger is not None:
             self.logger.info(message)
+
+    def _init_feature_cache_root(self) -> Optional[str]:
+        if not self.feature_cache_enabled:
+            return None
+        if self.add_white_noise and self.split in self.white_noise_splits:
+            self.feature_cache_enabled = False
+            if not self._cache_warning_emitted:
+                warnings.warn(
+                    "Feature cache is disabled because white-noise augmentation is active "
+                    f"for split '{self.split}', which would make cached features stochastic."
+                )
+                self._cache_warning_emitted = True
+            return None
+
+        cache_root = self.feature_cache_dir
+        if not cache_root:
+            cache_root = os.path.join(self.root_dir, ".feature_cache")
+        feature_tag = (
+            f"sr{self.target_sr}_seg{int(round(self.segment_seconds * 1000.0))}ms_"
+            f"fft{self.feature_extractor.n_fft}_hop{self.feature_extractor.hop_length}_"
+            f"win{self.feature_extractor.win_length}"
+        )
+        cache_root = os.path.join(cache_root, feature_tag)
+        os.makedirs(cache_root, exist_ok=True)
+        self._log(f"[{self.split}] feature cache enabled: {cache_root}")
+        return cache_root
+
+    def _feature_cache_path(self, seg: Dict[str, Any]) -> Optional[str]:
+        if not self.feature_cache_enabled or self._feature_cache_root is None:
+            return None
+        cache_key = (
+            f"{seg['audio_path']}|{seg['start_sec']:.6f}|{seg['duration_sec']:.6f}|"
+            f"{self.target_sr}|{self.feature_extractor.n_fft}|{self.feature_extractor.hop_length}|"
+            f"{self.feature_extractor.win_length}|{self.audio_subdir}|{self.metadata_subdir}"
+        )
+        digest = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
+        prefix = str(seg.get("file_id", "unknown"))
+        return os.path.join(self._feature_cache_root, f"{prefix}_{digest}.pt")
+
+    def _load_or_extract_features(self, seg: Dict[str, Any], audio: np.ndarray) -> Dict[str, torch.Tensor]:
+        cache_path = self._feature_cache_path(seg)
+        if cache_path and os.path.isfile(cache_path):
+            return torch.load(cache_path, map_location="cpu")
+
+        audio_tensor = torch.from_numpy(audio).float()
+        feats = self.feature_extractor.extract(audio_tensor)
+        feats = {k: v.contiguous().cpu() for k, v in feats.items()}
+
+        if cache_path:
+            tmp_path = cache_path + f".tmp.{os.getpid()}"
+            torch.save(feats, tmp_path)
+            os.replace(tmp_path, cache_path)
+        return feats
 
     def _try_load_cache(self) -> bool:
         cache_path = self._cache_path()
@@ -211,6 +281,47 @@ class StaticDOADataset(Dataset):
 
         audio_dir = os.path.join(self.root_dir, self.audio_subdir)
         metadata_dir = os.path.join(self.root_dir, self.metadata_subdir)
+        flat_metadata_csv = os.path.join(self.root_dir, "metadata.csv")
+
+        # New flat-layout protocol used by the KEMAR + SofaMyRoom dataset:
+        # root/
+        #   metadata.csv
+        #   binaural/*.wav
+        if os.path.isfile(flat_metadata_csv):
+            with open(flat_metadata_csv, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+            self._log(f"[{self.split}] 扫描扁平元数据: {flat_metadata_csv} ({len(rows)} rows)")
+            for idx, row in enumerate(rows, start=1):
+                wav_path_raw = str(row.get("wav_path", "")).strip()
+                if not wav_path_raw:
+                    warnings.warn(f"Missing wav_path in {flat_metadata_csv} row {idx}; skipping.")
+                    continue
+                candidate_paths = []
+                if os.path.isabs(wav_path_raw):
+                    candidate_paths.append(wav_path_raw)
+                else:
+                    candidate_paths.append(wav_path_raw)
+                    candidate_paths.append(os.path.join(self.root_dir, wav_path_raw))
+                wav_path = next((p for p in candidate_paths if os.path.isfile(p)), candidate_paths[-1])
+                if not os.path.isfile(wav_path):
+                    warnings.warn(f"Audio not found for metadata row: {wav_path}")
+                    continue
+                try:
+                    azimuth_deg = float(row["azimuth_deg"])
+                except Exception:
+                    warnings.warn(f"Invalid azimuth_deg in {flat_metadata_csv} row {idx}; skipping.")
+                    continue
+                file_id = str(row.get("file_id", Path(wav_path).stem)).strip() or Path(wav_path).stem
+                recordings.append(StaticRecording(
+                    audio_path=wav_path,
+                    metadata_path=flat_metadata_csv,
+                    file_id=file_id,
+                    azimuth_deg=azimuth_deg,
+                ))
+                if idx % 1000 == 0 or idx == len(rows):
+                    self._log(f"[{self.split}] 已扫描 {idx}/{len(rows)} 个扁平样本")
+            return recordings
 
         if not os.path.isdir(audio_dir):
             raise ValueError(f"Audio directory not found: {audio_dir}")
@@ -308,7 +419,7 @@ class StaticDOADataset(Dataset):
                 continue
 
             # 读取元数据获取方位角（静态场景，取单一值）
-            azimuth_deg = self._read_azimuth(rec.metadata_path)
+            azimuth_deg = rec.azimuth_deg if rec.azimuth_deg is not None else self._read_azimuth(rec.metadata_path)
             if azimuth_deg is None:
                 warnings.warn(f"Cannot read azimuth from {rec.metadata_path}; skipping.")
                 continue
@@ -447,16 +558,15 @@ class StaticDOADataset(Dataset):
             if np.random.random() < self.white_noise_prob:
                 audio = self._add_white_noise_with_snr(audio, self.white_noise_snr_db)
 
-        # 转换为 tensor 并提取特征
-        audio_tensor = torch.from_numpy(audio).float()
-        feats = self.feature_extractor.extract(audio_tensor)
+        # 提取特征（可选磁盘缓存）
+        feats = self._load_or_extract_features(seg, audio)
 
         file_id = seg.get("file_id")
         if file_id is None:
             basename = os.path.basename(seg["audio_path"])
             file_id = basename.replace("binaural", "").replace(".wav", "")
 
-        return {
+        sample = {
             "file_id": file_id,
             "log_mag_L": feats["log_mag_L"],   # [T, F]
             "log_mag_R": feats["log_mag_R"],   # [T, F]
@@ -474,6 +584,10 @@ class StaticDOADataset(Dataset):
             "front_back_label": self._azimuth_to_front_back_label(seg["azimuth_deg"]),
             "front_back_focus_distance_deg": self._compute_front_back_focus_distance_deg(seg["azimuth_deg"]),
         }
+        if self.include_waveform:
+            audio_tensor = torch.from_numpy(audio).float()
+            sample["waveform"] = audio_tensor  # [2, samples]
+        return sample
 
     @staticmethod
     def _add_white_noise_with_snr(audio: np.ndarray, snr_db: float) -> np.ndarray:
@@ -584,6 +698,9 @@ def build_static_datasets(cfg, logger=None) -> Tuple[Dataset, Dataset, Dataset]:
         azimuth_coordinate_order=ds_cfg.get("azimuth_coordinate_order", "xy"),
         segment_hop_seconds=ds_cfg.get("segment_hop_seconds", None),
         max_segments_per_recording=ds_cfg.get("max_segments_per_recording", None),
+        include_waveform=ds_cfg.get("include_waveform", False),
+        feature_cache_enabled=ds_cfg.get("feature_cache_enabled", False),
+        feature_cache_dir=ds_cfg.get("feature_cache_dir", None),
         logger=logger,
     )
 

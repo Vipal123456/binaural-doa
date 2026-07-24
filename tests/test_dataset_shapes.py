@@ -13,7 +13,7 @@ import pytest
 
 from dataset.feature_extractor import FeatureExtractor
 from utils.angle import (
-    angle_to_bin, bin_to_angle, angular_error, wrap_angle, angles_to_bins,
+    angle_to_bin, bin_to_angle, bins_to_angles, angular_error, wrap_angle, angles_to_bins,
 )
 
 
@@ -27,7 +27,10 @@ class TestFeatureExtractor:
     def test_output_keys(self, fe):
         audio = torch.randn(2, 16000)  # 1秒的立体声音频
         feats = fe.extract(audio)
-        expected_keys = {"log_mag_L", "log_mag_R", "ipd", "ild"}
+        expected_keys = {
+            "log_mag_L", "log_mag_R", "ipd", "ild", "ipd_sin", "ipd_cos",
+            "coherence", "spec_real_L", "spec_imag_L", "spec_real_R", "spec_imag_R",
+        }
         assert set(feats.keys()) == expected_keys
 
     def test_output_shapes_match(self, fe):
@@ -64,12 +67,18 @@ class TestAngleUtils:
     """验证角度转换和误差计算。"""
 
     def test_bin_round_trip(self):
-        for angle in [-180, -90, 0, 45, 179]:
+        for angle in np.arange(-180, 180, 5):
             b = angle_to_bin(angle, 72)
             recovered = bin_to_angle(b, 72)
-            # 误差应在一个区间宽度（5°）以内
-            assert abs(recovered - angle) <= 5.0, \
+            assert recovered == pytest.approx(float(angle)), \
                 f"angle={angle} → bin={b} → recovered={recovered}"
+
+    def test_correct_class_has_zero_angular_error(self):
+        bins = np.arange(72)
+        angles = np.asarray([bin_to_angle(int(b), 72) for b in bins])
+        recovered = bins_to_angles(bins, 72)
+        errors = angular_error(recovered, angles)
+        assert np.all(errors == 0.0)
 
     def test_angular_error_wrap(self):
         """在 ±180° 附近的误差应该很小，而不是约 360°。"""

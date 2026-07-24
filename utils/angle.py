@@ -39,7 +39,7 @@ def angle_to_bin(angle_deg: float,
 def bin_to_angle(bin_idx: int,
                  num_classes: int = 72,
                  azimuth_range: Tuple[float, float] = (-180.0, 180.0)) -> float:
-    """将 bin 索引转换为该 bin 的中心角度。
+    """将 bin 索引转换为对应的离散方向点。
 
     参数:
         bin_idx: 类别索引。
@@ -47,11 +47,17 @@ def bin_to_angle(bin_idx: int,
         azimuth_range: (min, max)。
 
     返回:
-        中心角度（度）。
+        离散方向角（度）。
+
+    Notes
+    -----
+    当任务的类别定义为 ``[-180, -175, ..., 175]`` 这类固定
+    DOA 候选点时，类别 0 对应 ``-180`` 度，而不是区间中心
+    ``-177.5`` 度。这保证正确分类的角误差为 0 度。
     """
     lo, hi = azimuth_range
     bin_width = (hi - lo) / num_classes
-    return lo + (bin_idx + 0.5) * bin_width
+    return lo + bin_idx * bin_width
 
 
 def angles_to_bins(angles: np.ndarray,
@@ -72,7 +78,7 @@ def bins_to_angles(bins: np.ndarray,
     """:func:`bin_to_angle` 的向量化版本。"""
     lo, hi = azimuth_range
     bin_width = (hi - lo) / num_classes
-    return lo + (bins + 0.5) * bin_width
+    return lo + bins * bin_width
 
 
 # ======================================================================

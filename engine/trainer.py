@@ -10,7 +10,7 @@ import torch.nn as nn
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
-from losses import DOALoss, MultiTaskDOALoss, DOAVectorRegressionLoss, PureRegressionDOALoss
+from losses import DOALoss, MultiTaskDOALoss, DOAVectorRegressionLoss, PureRegressionDOALoss, DPRTFMSELoss
 from metrics import DOAMetrics
 from utils.checkpoint import save_checkpoint, load_checkpoint
 from utils.logger import TBWriter
@@ -55,7 +55,11 @@ class Trainer:
         self.use_regression = getattr(m, 'use_regression', False)
         self.use_pure_regression = getattr(m, 'use_pure_regression', False)
         self.use_vector_regression = self.model_type == "sdel_doa_reg"
-        if self.use_pure_regression:
+        self.use_dprtf_loss = self.model_type == "dprtf_doa_cls"
+        if self.use_dprtf_loss:
+            self.criterion = DPRTFMSELoss()
+            self.logger.info("使用 DP-RTF template MSE loss")
+        elif self.use_pure_regression:
             front_back_aux_weight = getattr(t, 'front_back_aux_weight', 0.0)
             self.criterion = PureRegressionDOALoss(
                 front_back_aux_weight=front_back_aux_weight,
@@ -165,6 +169,8 @@ class Trainer:
         # 训练状态
         self.start_epoch = 0
         self.best_mae = float("inf")
+        self.best_accuracy = float("-inf")
+        self.best_accuracy_mae = float("inf")
         self.global_step = 0
 
         # 早停机制（如果配置中启用）
@@ -207,8 +213,13 @@ class Trainer:
             self.scheduler.load_state_dict(ckpt["scheduler"])
         self.start_epoch = ckpt.get("epoch", 0) + 1
         self.best_mae = ckpt.get("best_mae", float("inf"))
+        self.best_accuracy = ckpt.get("best_accuracy", float("-inf"))
+        self.best_accuracy_mae = ckpt.get("best_accuracy_mae", float("inf"))
         self.global_step = ckpt.get("global_step", 0)
-        self.logger.info(f"Resumed at epoch {self.start_epoch}, best MAE={self.best_mae:.2f}")
+        self.logger.info(
+            f"Resumed at epoch {self.start_epoch}, best MAE={self.best_mae:.2f}, "
+            f"best Acc={self.best_accuracy:.4f}"
+        )
 
     # ------------------------------------------------------------------
     # 训练
@@ -230,10 +241,12 @@ class Trainer:
                 self.scheduler.step()
 
             # 验证（跳过空验证集）
-            is_best = False
+            is_best_mae = False
+            is_best_acc = False
             if epoch % t.val_interval == 0 and len(self.val_loader) > 0:
                 val_results = self._validate(epoch)
                 mae = val_results["mean_angular_error"]
+                accuracy = val_results["accuracy"]
                 self.logger.info(
                     f"  val  acc={val_results['accuracy']:.4f}  "
                     f"F1={val_results['f1_score']:.4f}  "
@@ -246,10 +259,20 @@ class Trainer:
                 for k, v in val_results.items():
                     self.tb_writer.add_scalar(f"val/{k}", v, epoch)
 
-                # 保存最佳模型
-                is_best = mae < self.best_mae
-                if is_best:
+                # MAE 和分类准确率分别保存最佳检查点。
+                is_best_mae = mae < self.best_mae
+                if is_best_mae:
                     self.best_mae = mae
+                is_best_acc = (
+                    accuracy > self.best_accuracy
+                    or (
+                        accuracy == self.best_accuracy
+                        and mae < self.best_accuracy_mae
+                    )
+                )
+                if is_best_acc:
+                    self.best_accuracy = accuracy
+                    self.best_accuracy_mae = mae
 
                 # 检查早停
                 if self.early_stopping is not None:
@@ -259,13 +282,13 @@ class Trainer:
                             f"\n早停触发！最佳 MAE={self.early_stopping.best_value:.2f}° "
                             f"已连续 {self.early_stopping.patience} 轮无改善。"
                         )
-                        self._save(epoch, is_best)
+                        self._save(epoch, is_best_mae, is_best_acc)
                         self.tb_writer.close()
                         return  # 提前结束训练
             elif len(self.val_loader) == 0:
                 self.logger.info("  (validation skipped - empty validation set)")
 
-            self._save(epoch, is_best)
+            self._save(epoch, is_best_mae, is_best_acc)
 
         self.tb_writer.close()
         self.logger.info("Training complete.")
@@ -292,7 +315,14 @@ class Trainer:
             with autocast(device_type=self.device.type, enabled=self.use_amp):
                 out = self.model(batch)
 
-                if self.use_pure_regression:
+                if self.use_dprtf_loss:
+                    loss_dict = self.criterion(
+                        out["rtf_feat"],
+                        out["rtf_template_set"],
+                        labels,
+                    )
+                    loss = loss_dict["total"]
+                elif self.use_pure_regression:
                     pred_vec = out["angle_vec"]
                     true_angle_deg = batch["azimuth_deg"].float()
                     true_angle_rad = torch.deg2rad(true_angle_deg)
@@ -371,7 +401,25 @@ class Trainer:
 
             if t.grad_clip > 0:
                 self.scaler.unscale_(self.optimizer)
-                nn.utils.clip_grad_norm_(self.model.parameters(), t.grad_clip)
+                grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), t.grad_clip)
+                if not torch.isfinite(grad_norm):
+                    non_finite_batches += 1
+                    self.logger.warning(
+                        f"  [Epoch {epoch}][{batch_idx}/{len(self.train_loader)}] "
+                        f"non-finite gradient norm detected ({grad_norm}); optimizer step skipped"
+                    )
+                    self.optimizer.zero_grad(set_to_none=True)
+                    # `unscale_()` has already been called for this optimizer on this iteration.
+                    # Advance the scaler state before continuing, otherwise the next iteration
+                    # will hit "unscale_() has already been called on this optimizer".
+                    self.scaler.update()
+                    if non_finite_batches >= 20:
+                        self.logger.warning(
+                            f"Epoch {epoch}: non-finite batches reached {non_finite_batches}, "
+                            "stopping this epoch early"
+                        )
+                        break
+                    continue
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -381,7 +429,13 @@ class Trainer:
             self.global_step += 1
 
             if batch_idx % t.log_interval == 0:
-                if self.use_pure_regression:
+                if self.use_dprtf_loss:
+                    self.logger.info(
+                        f"  [Epoch {epoch}][{batch_idx}/{len(self.train_loader)}] "
+                        f"loss={loss.item():.4f} (rtf={loss_dict['regression']:.4f})"
+                    )
+                    self.tb_writer.add_scalar("train/step_loss_rtf", loss_dict["regression"], self.global_step)
+                elif self.use_pure_regression:
                     extra = ""
                     if loss_dict.get("front_back") is not None:
                         extra = f" (reg={loss_dict['regression']:.4f}, fb={loss_dict['front_back']:.4f})"
@@ -479,13 +533,15 @@ class Trainer:
     # 检查点保存
     # ------------------------------------------------------------------
 
-    def _save(self, epoch: int, is_best: bool) -> None:
-        """保存最新检查点（以及可选的最佳检查点）。"""
+    def _save(self, epoch: int, is_best_mae: bool, is_best_acc: bool) -> None:
+        """保存最新、最佳 MAE 和最佳 Accuracy 检查点。"""
         state = {
             "epoch": epoch,
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "best_mae": self.best_mae,
+            "best_accuracy": self.best_accuracy,
+            "best_accuracy_mae": self.best_accuracy_mae,
             "global_step": self.global_step,
         }
         if self.scheduler is not None:
@@ -494,9 +550,17 @@ class Trainer:
         save_dir = self.cfg.output.save_dir
         save_checkpoint(state, save_dir, "latest.pth")
 
-        if is_best:
+        if is_best_mae:
+            save_checkpoint(state, save_dir, "best_mae.pth")
+            # 保留旧文件名，避免现有评测脚本失效。
             save_checkpoint(state, save_dir, "best.pth")
-            self.logger.info(f"  ★ New best model saved (MAE={self.best_mae:.2f}°)")
+            self.logger.info(f"  ★ New best MAE model saved (MAE={self.best_mae:.2f}°)")
+        if is_best_acc:
+            save_checkpoint(state, save_dir, "best_acc.pth")
+            self.logger.info(
+                f"  ★ New best Accuracy model saved "
+                f"(Acc={self.best_accuracy:.4f}, MAE={self.best_accuracy_mae:.2f}°)"
+            )
 
     # ------------------------------------------------------------------
     # 辅助方法

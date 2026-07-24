@@ -58,6 +58,7 @@ class TemporalHead(nn.Module):
         use_attention_pooling: bool = True,
         use_front_back_auxiliary: bool = False,
         azimuth_range = (-180.0, 180.0),
+        attention_pooling_variant: str = "default",
     ):
         super().__init__()
         self.use_regression = use_regression
@@ -67,6 +68,7 @@ class TemporalHead(nn.Module):
         self.num_classes = num_classes
         self.azimuth_range = tuple(azimuth_range)
         self.temporal_encoder_type = temporal_encoder_type
+        self.attention_pooling_variant = attention_pooling_variant
 
         rnn_dropout = gru_dropout if gru_num_layers > 1 else 0.0
         if temporal_encoder_type == "gru":
@@ -113,11 +115,22 @@ class TemporalHead(nn.Module):
         # Attention Pooling: 对时间维进行可学习加权聚合
         if self.use_attention_pooling:
             attn_hidden = max(temporal_out_dim // 2, 32)
-            self.attn_pool = nn.Sequential(
-                nn.Linear(temporal_out_dim, attn_hidden),
-                nn.Tanh(),
-                nn.Linear(attn_hidden, 1),
-            )
+            if attention_pooling_variant == "default":
+                self.attn_pool = nn.Sequential(
+                    nn.Linear(temporal_out_dim, attn_hidden),
+                    nn.Tanh(),
+                    nn.Linear(attn_hidden, 1),
+                )
+            elif attention_pooling_variant == "stronger_mlp":
+                self.attn_pool = nn.Sequential(
+                    nn.Linear(temporal_out_dim, attn_hidden),
+                    nn.LayerNorm(attn_hidden),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout),
+                    nn.Linear(attn_hidden, 1),
+                )
+            else:
+                raise ValueError(f"Unsupported attention_pooling_variant: {attention_pooling_variant}")
 
         # 分类头：输出离散的方位角类别
         if not self.use_pure_regression:
@@ -170,8 +183,10 @@ class TemporalHead(nn.Module):
             attn_logits = self.attn_pool(temporal_out)     # [B, T, 1]
             attn_weights = torch.softmax(attn_logits, dim=1)
             pooled = (attn_weights * temporal_out).sum(dim=1)
+            result_attn = attn_weights
         else:
             pooled = temporal_out.mean(dim=1)
+            result_attn = None
         pooled = self.dropout(pooled)
 
         if self.use_pure_regression:
@@ -194,6 +209,8 @@ class TemporalHead(nn.Module):
 
         if self.use_front_back_auxiliary:
             result["front_back_logits"] = self.front_back_classifier(pooled)
+        if result_attn is not None:
+            result["attn_weights"] = result_attn
 
         # 回归输出（如果启用）
         if self.use_regression and not self.use_pure_regression:
@@ -201,4 +218,54 @@ class TemporalHead(nn.Module):
             angle_rad = angle_normalized.squeeze(-1) * 3.14159265359  # [B], 范围 [-π, π]
             result["angle"] = angle_rad
 
+        return result
+
+
+class TemporalHeadMulMLP(nn.Module):
+    """Clip-level BiGRU head with SDEL-style bidirectional multiplication."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        gru_hidden_size: int = 128,
+        gru_num_layers: int = 2,
+        num_classes: int = 72,
+        gru_dropout: float = 0.2,
+        dropout: float = 0.2,
+        mlp_hidden_dim: int = 128,
+        mlp_num_layers: int = 2,
+        use_front_back_auxiliary: bool = False,
+    ):
+        super().__init__()
+        self.use_front_back_auxiliary = bool(use_front_back_auxiliary)
+        rnn_dropout = gru_dropout if gru_num_layers > 1 else 0.0
+        self.temporal_encoder = nn.GRU(
+            input_size=input_dim,
+            hidden_size=gru_hidden_size,
+            num_layers=gru_num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=rnn_dropout,
+        )
+        mlp_layers = []
+        in_dim = gru_hidden_size
+        for _ in range(max(1, int(mlp_num_layers))):
+            mlp_layers.append(nn.Linear(in_dim, mlp_hidden_dim))
+            mlp_layers.append(nn.ReLU())
+            mlp_layers.append(nn.Dropout(dropout))
+            in_dim = mlp_hidden_dim
+        self.mlp = nn.Sequential(*mlp_layers)
+        self.classifier = nn.Linear(in_dim, num_classes)
+        if self.use_front_back_auxiliary:
+            self.front_back_classifier = nn.Linear(in_dim, 2)
+
+    def forward(self, x: torch.Tensor) -> dict:
+        temporal_out, _ = self.temporal_encoder(x)
+        h = temporal_out.shape[-1] // 2
+        mul_feat = torch.tanh(temporal_out[:, :, :h]) * torch.tanh(temporal_out[:, :, h:])
+        pooled = mul_feat.mean(dim=1)
+        feat = self.mlp(pooled)
+        result = {"logits": self.classifier(feat)}
+        if self.use_front_back_auxiliary:
+            result["front_back_logits"] = self.front_back_classifier(feat)
         return result

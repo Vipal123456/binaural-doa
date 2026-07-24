@@ -37,9 +37,18 @@ from models.native_lite_v7 import (
     NativeLiteContentOnlyDOANet,
     NativeLiteEarlyFusionDOANet,
 )
-from models.favit_style_baseline import FAViTStyleBaseline
-from models.bil_style_baseline import BiLStyleGCCPHATCRNBaseline
-from models.sdel_crnn_baseline import SDELCRNNBaseline
+from models.moving_sequence_v7 import MovingDualCueSequenceDOANet, MovingLiteCueSequenceDOANet
+from models.favit_style_baseline import (
+    FAViTStyleBaseline,
+    FAViTStyleSequenceBaseline,
+    AMViTStyleBaseline,
+    AMViTStyleSequenceBaseline,
+)
+from models.bil_style_baseline import BiLStyleGCCPHATCRNBaseline, BiLStyleGCCPHATCRNSequenceBaseline
+from models.sdel_crnn_baseline import SDELCRNNBaseline, SDELCRNNSequenceBaseline
+from models.biear_doa_baseline import BiEARDoaClassifier
+from models.dprtf_kemar import DPRTFKemarDOANet
+from models.fn_ssl_baseline import FNSSLBaseline
 
 
 class BinauralDOANet(nn.Module):
@@ -361,6 +370,44 @@ def build_model(cfg):
             output_mode="reg" if model_type == "sdel_doa_reg" else "cls",
         )
 
+    if model_type == "biear_doa_cls":
+        return BiEARDoaClassifier(
+            sample_rate=getattr(getattr(cfg, "dataset", object()), "sample_rate", 16000),
+            segment_seconds=getattr(getattr(cfg, "dataset", object()), "segment_seconds", 2.0),
+            timesteps=getattr(m, "biear_timesteps", 40),
+            n_fft=getattr(m, "biear_n_fft", 1024),
+            n_bands=getattr(m, "biear_n_bands", 64),
+            latent_dim=getattr(m, "biear_latent_dim", 100),
+            encoder_hidden_dim=getattr(m, "biear_encoder_hidden_dim", 200),
+            num_classes=m.num_classes,
+            dropout=m.dropout,
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+            use_cc=getattr(m, "biear_use_cc", False),
+            fixed_frontend_q=getattr(m, "biear_fixed_frontend_q", False),
+            controller_mode=getattr(m, "biear_controller_mode", "independent"),
+            delta_q_base=getattr(m, "biear_delta_q_base", 2.0),
+            delta_q_low_factor=getattr(m, "biear_delta_q_low_factor", 0.5),
+            delta_q_high_factor=getattr(m, "biear_delta_q_high_factor", 1.0),
+            delta_q_mode=getattr(m, "biear_delta_q_mode", "absolute"),
+        )
+
+    if model_type == "moving_sdel_doa_cls":
+        return SDELCRNNSequenceBaseline(
+            freq_bins=freq_bins,
+            cnn_channels=getattr(m, "sdel_cnn_channels", [32, 64, 128]),
+            f_pool_size=getattr(m, "sdel_f_pool_size", [4, 4, 4]),
+            t_pool_size=getattr(m, "sdel_t_pool_size", [1, 1, 1]),
+            kernel_size=tuple(getattr(m, "sdel_kernel_size", [3, 3])),
+            dropout=m.dropout,
+            gru_hidden_size=m.gru_hidden_size,
+            gru_num_layers=m.gru_num_layers,
+            fnn_size=getattr(m, "sdel_fnn_size", 128),
+            num_fnn_layers=getattr(m, "sdel_num_fnn_layers", 2),
+            num_classes=m.num_classes,
+            label_steps=getattr(m, "label_steps", 40),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+        )
+
     if model_type == "favit_style_baseline":
         return FAViTStyleBaseline(
             freq_bins=freq_bins,
@@ -376,19 +423,105 @@ def build_model(cfg):
             use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
         )
 
+    if model_type == "favit_style_sequence_baseline":
+        return FAViTStyleSequenceBaseline(
+            freq_bins=freq_bins,
+            cue_input_mode=getattr(m, "favit_cue_input_mode", "ild_ipd"),
+            time_bins=getattr(m, "favit_time_bins", 8),
+            num_patches=getattr(m, "favit_num_patches", 16),
+            embed_dim=getattr(m, "favit_embed_dim", 64),
+            depth=getattr(m, "favit_depth", 6),
+            num_heads=getattr(m, "favit_num_heads", 4),
+            mlp_ratio=getattr(m, "favit_mlp_ratio", 4.0),
+            dropout=m.dropout,
+            num_classes=m.num_classes,
+            label_steps=getattr(m, "label_steps", 40),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+        )
+
+    if model_type == "amvit_style_baseline":
+        return AMViTStyleBaseline(
+            freq_bins=freq_bins,
+            time_bins=getattr(m, "favit_time_bins", 16),
+            num_patches=getattr(m, "favit_num_patches", 16),
+            embed_dim=getattr(m, "favit_embed_dim", 64),
+            depth=getattr(m, "favit_depth", 4),
+            num_heads=getattr(m, "favit_num_heads", 4),
+            mlp_ratio=getattr(m, "favit_mlp_ratio", 4.0),
+            dropout=m.dropout,
+            num_classes=m.num_classes,
+            modulation_type=getattr(m, "amvit_modulation_type", "mul"),
+            modulation_hidden_dim=getattr(m, "amvit_modulation_hidden_dim", 128),
+            classifier_hidden_dims=tuple(getattr(m, "amvit_classifier_hidden_dims", [512, 256, 100])),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+        )
+
+    if model_type == "amvit_style_sequence_baseline":
+        return AMViTStyleSequenceBaseline(
+            freq_bins=freq_bins,
+            time_bins=getattr(m, "favit_time_bins", 8),
+            num_patches=getattr(m, "favit_num_patches", 16),
+            embed_dim=getattr(m, "favit_embed_dim", 64),
+            depth=getattr(m, "favit_depth", 4),
+            num_heads=getattr(m, "favit_num_heads", 4),
+            mlp_ratio=getattr(m, "favit_mlp_ratio", 4.0),
+            dropout=m.dropout,
+            num_classes=m.num_classes,
+            label_steps=getattr(m, "label_steps", 40),
+            modulation_type=getattr(m, "amvit_modulation_type", "mul"),
+            modulation_hidden_dim=getattr(m, "amvit_modulation_hidden_dim", 128),
+            classifier_hidden_dims=tuple(getattr(m, "amvit_classifier_hidden_dims", [512, 256, 100])),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+        )
+
     if model_type == "bil_style_gccphat_crn_72cls":
         return BiLStyleGCCPHATCRNBaseline(
             freq_bins=freq_bins,
             gcc_bins=getattr(m, "bil_gcc_bins", 64),
-            cnn_channels=getattr(m, "bil_cnn_channels", [32, 64, 96]),
+            cnn_channels=getattr(m, "bil_cnn_channels", [128, 128, 128]),
             f_pool_size=getattr(m, "bil_f_pool_size", [2, 2, 2]),
             t_pool_size=getattr(m, "bil_t_pool_size", [1, 1, 1]),
             kernel_size=tuple(getattr(m, "bil_kernel_size", [3, 3])),
             dropout=m.dropout,
-            gru_hidden_size=getattr(m, "bil_gru_hidden_size", 96),
-            gru_num_layers=getattr(m, "bil_gru_num_layers", 1),
-            bidirectional=getattr(m, "bil_bidirectional", True),
+            gru_hidden_size=getattr(m, "bil_gru_hidden_size", 128),
+            gru_num_layers=getattr(m, "bil_gru_num_layers", 2),
+            bidirectional=getattr(m, "bil_bidirectional", False),
             mlp_hidden_size=getattr(m, "bil_mlp_hidden_size", 128),
+            num_classes=m.num_classes,
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+        )
+
+    if model_type == "moving_bil_style_gccphat_crn_72cls":
+        return BiLStyleGCCPHATCRNSequenceBaseline(
+            freq_bins=freq_bins,
+            gcc_bins=getattr(m, "bil_gcc_bins", 64),
+            cnn_channels=getattr(m, "bil_cnn_channels", [128, 128, 128]),
+            f_pool_size=getattr(m, "bil_f_pool_size", [2, 2, 2]),
+            t_pool_size=getattr(m, "bil_t_pool_size", [1, 1, 1]),
+            kernel_size=tuple(getattr(m, "bil_kernel_size", [3, 3])),
+            dropout=m.dropout,
+            gru_hidden_size=getattr(m, "bil_gru_hidden_size", 128),
+            gru_num_layers=getattr(m, "bil_gru_num_layers", 2),
+            bidirectional=getattr(m, "bil_bidirectional", False),
+            num_classes=m.num_classes,
+            label_steps=getattr(m, "label_steps", 40),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+        )
+
+    if model_type == "dprtf_doa_cls":
+        return DPRTFKemarDOANet(
+            template_path=m.dprtf_template_path,
+            num_classes=m.num_classes,
+            freq_bins_used=getattr(m, "dprtf_freq_bins_used", 128),
+            planes=getattr(m, "dprtf_planes", 64),
+            rnn_hidden_size=getattr(m, "dprtf_rnn_hidden_size", 256),
+            use_residual_blocks=getattr(m, "dprtf_use_residual_blocks", False),
+        )
+
+    if model_type == "fn_ssl_doa_cls":
+        return FNSSLBaseline(
+            hidden_size=getattr(m, "fnssl_hidden_size", 256),
+            dropout=m.dropout,
             num_classes=m.num_classes,
             use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
         )
@@ -418,9 +551,13 @@ def build_model(cfg):
             azimuth_range=tuple(m.azimuth_range),
             dropout=m.dropout,
             use_attention_pooling=getattr(m, "use_attention_pooling", True),
+            attention_pooling_variant=getattr(m, "attention_pooling_variant", "default"),
             use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", True),
             use_regression=getattr(m, "use_regression", False),
             use_pure_regression=getattr(m, "use_pure_regression", False),
+            temporal_head_type=getattr(m, "temporal_head_type", "default"),
+            temporal_mlp_hidden_dim=getattr(m, "temporal_mlp_hidden_dim", 128),
+            temporal_mlp_num_layers=getattr(m, "temporal_mlp_num_layers", 2),
         )
 
     if model_type == "native_lite_v7_cue_concat":
@@ -447,6 +584,7 @@ def build_model(cfg):
             azimuth_range=tuple(m.azimuth_range),
             dropout=m.dropout,
             use_attention_pooling=getattr(m, "use_attention_pooling", True),
+            attention_pooling_variant=getattr(m, "attention_pooling_variant", "default"),
             use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", True),
             use_regression=getattr(m, "use_regression", False),
             use_pure_regression=getattr(m, "use_pure_regression", False),
@@ -458,6 +596,9 @@ def build_model(cfg):
             encoder_channels=getattr(m, "encoder_channels", [24, 40, 64]),
             encoder_out_dim=getattr(m, "encoder_out_dim", 96),
             encoder_variant=getattr(m, "encoder_variant", "v2_balanced"),
+            content_encoder_type=getattr(m, "content_encoder_type", "shared_2dcnn"),
+            content_encoder_num_bands=getattr(m, "content_encoder_num_bands", 4),
+            content_encoder_band_out_dim=getattr(m, "content_encoder_band_out_dim", 24),
             content_input_mode=getattr(m, "content_input_mode", "logmag"),
             cue_feature_mode=getattr(m, "cue_feature_mode", "ild_phase"),
             content_relation_mode=getattr(m, "content_relation_mode", "mean_diff_absdiff"),
@@ -480,6 +621,7 @@ def build_model(cfg):
             azimuth_range=tuple(m.azimuth_range),
             dropout=m.dropout,
             use_attention_pooling=getattr(m, "use_attention_pooling", True),
+            attention_pooling_variant=getattr(m, "attention_pooling_variant", "default"),
             use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", True),
             use_regression=getattr(m, "use_regression", False),
             use_pure_regression=getattr(m, "use_pure_regression", False),
@@ -491,19 +633,35 @@ def build_model(cfg):
             encoder_channels=getattr(m, "encoder_channels", [24, 40, 64]),
             encoder_out_dim=getattr(m, "encoder_out_dim", 96),
             encoder_variant=getattr(m, "encoder_variant", "v2_balanced"),
+            content_encoder_type=getattr(m, "content_encoder_type", "shared_2dcnn"),
+            content_encoder_num_bands=getattr(m, "content_encoder_num_bands", 4),
+            content_encoder_band_out_dim=getattr(m, "content_encoder_band_out_dim", 24),
             content_input_mode=getattr(m, "content_input_mode", "logmag"),
             content_relation_mode=getattr(m, "content_relation_mode", "mean_diff_absdiff"),
             content_fusion_dim=getattr(m, "content_fusion_dim", 80),
             lite_cue_bands=getattr(m, "lite_cue_bands", 16),
+            cue_band_mode=getattr(m, "cue_band_mode", "uniform"),
+            cue_sample_rate=getattr(cfg.dataset, "sample_rate", 16000),
             lite_cue_hidden_dim=getattr(m, "lite_cue_hidden_dim", 48),
             cue_value_out_dim=getattr(m, "cue_value_out_dim", 24),
             cue_reliability_out_dim=getattr(m, "cue_reliability_out_dim", 8),
+            cue_ild_bands=getattr(m, "cue_ild_bands", 16),
+            cue_ipd_bands=getattr(m, "cue_ipd_bands", 32),
+            cue_coherence_bands=getattr(m, "cue_coherence_bands", 16),
+            cue_ild_out_dim=getattr(m, "cue_ild_out_dim", 8),
+            cue_ipd_out_dim=getattr(m, "cue_ipd_out_dim", 16),
             lite_cue_kernel_size=getattr(m, "lite_cue_kernel_size", 3),
             lite_cue_encoder_type=getattr(m, "lite_cue_encoder_type", "temporal_conv"),
+            cue_value_encoder_type=getattr(m, "cue_value_encoder_type", None),
+            cue_reliability_encoder_type=getattr(m, "cue_reliability_encoder_type", None),
             dual_cue_fusion_mode=getattr(m, "dual_cue_fusion_mode", "concat"),
+            dual_cue_reliability_weight_scale=getattr(m, "dual_cue_reliability_weight_scale", 0.5),
+            cue_branch_mode=getattr(m, "cue_branch_mode", "dual"),
+            disable_reliability_branch=getattr(m, "disable_reliability_branch", False),
             dual_cue_use_tf_mask=getattr(m, "dual_cue_use_tf_mask", False),
             dual_cue_tf_mask_hidden_channels=getattr(m, "dual_cue_tf_mask_hidden_channels", 8),
             dual_cue_tf_mask_residual_scale=getattr(m, "dual_cue_tf_mask_residual_scale", 1.0),
+            disable_content_stream=getattr(m, "disable_content_stream", False),
             use_cross_ear_interaction=getattr(m, "use_cross_ear_interaction", False),
             gru_hidden_size=m.gru_hidden_size,
             gru_num_layers=m.gru_num_layers,
@@ -517,9 +675,67 @@ def build_model(cfg):
             azimuth_range=tuple(m.azimuth_range),
             dropout=m.dropout,
             use_attention_pooling=getattr(m, "use_attention_pooling", True),
+            attention_pooling_variant=getattr(m, "attention_pooling_variant", "default"),
             use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", True),
             use_regression=getattr(m, "use_regression", False),
             use_pure_regression=getattr(m, "use_pure_regression", False),
+            temporal_head_type=getattr(m, "temporal_head_type", "default"),
+            temporal_mlp_hidden_dim=getattr(m, "temporal_mlp_hidden_dim", 128),
+            temporal_mlp_num_layers=getattr(m, "temporal_mlp_num_layers", 2),
+        )
+
+    if model_type == "moving_v7_dual_cue_sequence":
+        return MovingDualCueSequenceDOANet(
+            encoder_channels=getattr(m, "encoder_channels", [24, 40, 64]),
+            encoder_out_dim=getattr(m, "encoder_out_dim", 96),
+            encoder_variant=getattr(m, "encoder_variant", "v2_balanced"),
+            content_input_mode=getattr(m, "content_input_mode", "logmag"),
+            content_relation_mode=getattr(m, "content_relation_mode", "mean_diff_absdiff"),
+            content_fusion_dim=getattr(m, "content_fusion_dim", 80),
+            lite_cue_bands=getattr(m, "lite_cue_bands", 16),
+            lite_cue_hidden_dim=getattr(m, "lite_cue_hidden_dim", 48),
+            cue_value_out_dim=getattr(m, "cue_value_out_dim", 24),
+            cue_reliability_out_dim=getattr(m, "cue_reliability_out_dim", 8),
+            lite_cue_kernel_size=getattr(m, "lite_cue_kernel_size", 3),
+            lite_cue_encoder_type=getattr(m, "lite_cue_encoder_type", "temporal_conv"),
+            dual_cue_fusion_mode=getattr(m, "dual_cue_fusion_mode", "concat"),
+            label_steps=getattr(m, "label_steps", 40),
+            gru_hidden_size=m.gru_hidden_size,
+            gru_num_layers=m.gru_num_layers,
+            gru_dropout=m.gru_dropout,
+            num_classes=m.num_classes,
+            dropout=m.dropout,
+            temporal_head_type=getattr(m, "temporal_head_type", "pool_before_gru"),
+            temporal_mlp_hidden_dim=getattr(m, "temporal_mlp_hidden_dim", 128),
+            temporal_mlp_num_layers=getattr(m, "temporal_mlp_num_layers", 2),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+        )
+
+    if model_type == "moving_v7_lite_cue_sequence":
+        return MovingLiteCueSequenceDOANet(
+            encoder_channels=getattr(m, "encoder_channels", [24, 40, 64]),
+            encoder_out_dim=getattr(m, "encoder_out_dim", 96),
+            encoder_variant=getattr(m, "encoder_variant", "v2_balanced"),
+            content_input_mode=getattr(m, "content_input_mode", "logmag"),
+            cue_feature_mode=getattr(m, "cue_feature_mode", "all"),
+            content_relation_mode=getattr(m, "content_relation_mode", "mean_diff_absdiff"),
+            content_fusion_dim=getattr(m, "content_fusion_dim", 80),
+            lite_cue_bands=getattr(m, "lite_cue_bands", 16),
+            lite_cue_hidden_dim=getattr(m, "lite_cue_hidden_dim", 48),
+            cue_encoder_out_dim=getattr(m, "cue_encoder_out_dim", 32),
+            lite_cue_kernel_size=getattr(m, "lite_cue_kernel_size", 3),
+            lite_cue_encoder_type=getattr(m, "lite_cue_encoder_type", "temporal_conv"),
+            use_cross_ear_interaction=getattr(m, "use_cross_ear_interaction", False),
+            label_steps=getattr(m, "label_steps", 40),
+            gru_hidden_size=m.gru_hidden_size,
+            gru_num_layers=m.gru_num_layers,
+            gru_dropout=m.gru_dropout,
+            num_classes=m.num_classes,
+            dropout=m.dropout,
+            temporal_head_type=getattr(m, "temporal_head_type", "pool_before_gru"),
+            temporal_mlp_hidden_dim=getattr(m, "temporal_mlp_hidden_dim", 128),
+            temporal_mlp_num_layers=getattr(m, "temporal_mlp_num_layers", 2),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
         )
 
     if model_type == "native_lite_v7_content_only":
