@@ -1,0 +1,55 @@
+\begin{thebibliography}{1}
+
+\bibitem{blauert1997}
+Jens Blauert,
+\newblock {\em Spatial Hearing: The Psychophysics of Human Sound Localization},
+\newblock MIT Press, Cambridge, MA, revised edition, 1997.
+
+\bibitem{may2011}
+Tobias May, Steven van~de Par, and Armin Kohlrausch,
+\newblock ``A probabilistic model for robust localization based on a binaural
+  auditory front-end,''
+\newblock {\em IEEE Transactions on Audio, Speech, and Language Processing},
+  vol. 19, no. 1, pp. 1--13, 2011.
+
+\bibitem{vecchiotti2019}
+Paolo Vecchiotti, Ning Ma, Stefano Squartini, and Guy~J. Brown,
+\newblock ``End-to-end binaural sound localisation from the raw waveform,''
+\newblock in {\em Proc. IEEE ICASSP}, 2019, pp. 451--455.
+
+\bibitem{knapp1976}
+Charles~H. Knapp and G.~Clifford Carter,
+\newblock ``The generalized correlation method for estimation of time delay,''
+\newblock {\em IEEE Transactions on Acoustics, Speech, and Signal Processing},
+  vol. 24, no. 4, pp. 320--327, 1976.
+
+\bibitem{tokala2025}
+Vikas Tokala, Eric Grinstein, Rory Brooks, Mike Brookes, Simon Doclo, Jesper
+  Jensen, and Patrick~A. Naylor,
+\newblock ``Binaural localization model for speech in noise,''
+\newblock {\em arXiv preprint arXiv:2507.20027}, 2025.
+
+\bibitem{panayotov2015}
+Vassil Panayotov, Guoguo Chen, Daniel Povey, and Sanjeev Khudanpur,
+\newblock ``Librispeech: An asr corpus based on public domain audio books,''
+\newblock in {\em Proc. IEEE ICASSP}, 2015, pp. 5206--5210.
+
+\bibitem{gardner1995}
+William~G. Gardner and Keith~D. Martin,
+\newblock ``Hrtf measurements of a kemar,''
+\newblock {\em The Journal of the Acoustical Society of America}, vol. 97, pp.
+  3907--3908, 1995.
+
+\bibitem{barumerli2021}
+Roberto Barumerli, Daniele Bianchi, Michele Geronazzo, and Federico Avanzini,
+\newblock ``Sofamyroom: A fast and multiplatform shoebox room simulator for
+  binaural room impulse response dataset generation,''
+\newblock {\em arXiv preprint arXiv:2106.12992}, 2021.
+
+\bibitem{thiemann2013}
+Joachim Thiemann, Nobutaka Ito, and Emmanuel Vincent,
+\newblock ``The diverse environments multi-channel acoustic noise database
+  (demand): A database of multichannel environmental noise recordings,''
+\newblock in {\em Proc. Meetings on Acoustics}, 2013, p. 035081.
+
+\end{thebibliography}

@@ -8,6 +8,7 @@
 
 import torch
 import torch.nn as nn
+from typing import Optional, Sequence
 import math
 
 try:
@@ -15,6 +16,69 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     Mamba = None
     MambaConfig = None
+
+
+class MultiScaleTemporalEvidence(nn.Module):
+    """Aggregate clip predictions from locally contextualized frame evidence."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        num_classes: int,
+        bottleneck_dim: int = 64,
+        dropout: float = 0.2,
+    ):
+        super().__init__()
+        bottleneck_dim = min(int(bottleneck_dim), int(input_dim))
+        self.input_proj = nn.Sequential(
+            nn.Conv1d(input_dim, bottleneck_dim, kernel_size=1, bias=False),
+            nn.BatchNorm1d(bottleneck_dim),
+            nn.SiLU(inplace=True),
+        )
+        self.context_branches = nn.ModuleList(
+            [
+                nn.Conv1d(
+                    bottleneck_dim,
+                    bottleneck_dim,
+                    kernel_size=3,
+                    padding=dilation,
+                    dilation=dilation,
+                    groups=bottleneck_dim,
+                    bias=False,
+                )
+                for dilation in (1, 2, 4)
+            ]
+        )
+        self.context_fuse = nn.Sequential(
+            nn.Conv1d(3 * bottleneck_dim, bottleneck_dim, kernel_size=1, bias=False),
+            nn.BatchNorm1d(bottleneck_dim),
+            nn.SiLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Conv1d(bottleneck_dim, input_dim, kernel_size=1, bias=False),
+        )
+        self.context_norm = nn.LayerNorm(input_dim)
+        self.frame_classifier = nn.Linear(input_dim, num_classes)
+        quality_hidden = max(input_dim // 4, 16)
+        self.quality = nn.Sequential(
+            nn.Linear(input_dim, quality_hidden),
+            nn.SiLU(inplace=True),
+            nn.Linear(quality_hidden, 1),
+        )
+
+    def forward(
+        self,
+        temporal_features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = temporal_features.transpose(1, 2)
+        bottleneck = self.input_proj(x)
+        contexts = [branch(bottleneck) for branch in self.context_branches]
+        residual = self.context_fuse(torch.cat(contexts, dim=1)).transpose(1, 2)
+        contextual = self.context_norm(temporal_features + residual)
+        frame_logits = self.frame_classifier(contextual)
+        weights = torch.softmax(self.quality(contextual), dim=1)
+        clip_logits = (weights * frame_logits).sum(dim=1)
+        pooled = (weights * contextual).sum(dim=1)
+        return clip_logits, pooled, frame_logits, weights
 
 
 class TemporalHead(nn.Module):
@@ -58,7 +122,9 @@ class TemporalHead(nn.Module):
         use_attention_pooling: bool = True,
         use_front_back_auxiliary: bool = False,
         azimuth_range = (-180.0, 180.0),
+        class_angles_deg: Optional[Sequence[float]] = None,
         attention_pooling_variant: str = "default",
+        temporal_aggregation_type: str = "attention",
     ):
         super().__init__()
         self.use_regression = use_regression
@@ -67,8 +133,13 @@ class TemporalHead(nn.Module):
         self.use_front_back_auxiliary = use_front_back_auxiliary
         self.num_classes = num_classes
         self.azimuth_range = tuple(azimuth_range)
+        if class_angles_deg is not None and len(class_angles_deg) != num_classes:
+            raise ValueError("class_angles_deg must contain exactly num_classes values")
         self.temporal_encoder_type = temporal_encoder_type
         self.attention_pooling_variant = attention_pooling_variant
+        if temporal_aggregation_type not in {"attention", "multiscale_evidence"}:
+            raise ValueError(f"Unsupported temporal_aggregation_type: {temporal_aggregation_type}")
+        self.temporal_aggregation_type = temporal_aggregation_type
 
         rnn_dropout = gru_dropout if gru_num_layers > 1 else 0.0
         if temporal_encoder_type == "gru":
@@ -112,8 +183,18 @@ class TemporalHead(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+        self.evidence_aggregator = None
+        if temporal_aggregation_type == "multiscale_evidence":
+            if self.use_pure_regression:
+                raise ValueError("multiscale_evidence currently requires classification output")
+            self.evidence_aggregator = MultiScaleTemporalEvidence(
+                input_dim=temporal_out_dim,
+                num_classes=num_classes,
+                bottleneck_dim=64,
+                dropout=dropout,
+            )
         # Attention Pooling: 对时间维进行可学习加权聚合
-        if self.use_attention_pooling:
+        elif self.use_attention_pooling:
             attn_hidden = max(temporal_out_dim // 2, 32)
             if attention_pooling_variant == "default":
                 self.attn_pool = nn.Sequential(
@@ -133,7 +214,7 @@ class TemporalHead(nn.Module):
                 raise ValueError(f"Unsupported attention_pooling_variant: {attention_pooling_variant}")
 
         # 分类头：输出离散的方位角类别
-        if not self.use_pure_regression:
+        if not self.use_pure_regression and self.evidence_aggregator is None:
             self.classifier = nn.Linear(temporal_out_dim, num_classes)
 
         # front/back 辅助头：显式学习前后判别
@@ -158,9 +239,12 @@ class TemporalHead(nn.Module):
                 nn.Linear(temporal_out_dim // 2, 2),
             )
 
-            centers_deg = self.azimuth_range[0] + (torch.arange(num_classes).float() + 0.5) * (
-                (self.azimuth_range[1] - self.azimuth_range[0]) / num_classes
-            )
+            if class_angles_deg is None:
+                centers_deg = self.azimuth_range[0] + torch.arange(num_classes).float() * (
+                    (self.azimuth_range[1] - self.azimuth_range[0]) / num_classes
+                )
+            else:
+                centers_deg = torch.as_tensor(class_angles_deg, dtype=torch.float32)
             self.register_buffer("bin_centers_deg", centers_deg, persistent=False)
 
     def forward(self, x: torch.Tensor) -> dict:
@@ -178,8 +262,11 @@ class TemporalHead(nn.Module):
             temporal_out = self.temporal_encoder(x)  # [B, T, D]
         else:
             temporal_out, _ = self.temporal_encoder(x)  # [B, T, 2*H]
+        frame_logits = None
+        if self.evidence_aggregator is not None:
+            logits, pooled, frame_logits, result_attn = self.evidence_aggregator(temporal_out)
         # 对时间维进行池化，得到片段级预测
-        if self.use_attention_pooling:
+        elif self.use_attention_pooling:
             attn_logits = self.attn_pool(temporal_out)     # [B, T, 1]
             attn_weights = torch.softmax(attn_logits, dim=1)
             pooled = (attn_weights * temporal_out).sum(dim=1)
@@ -204,8 +291,11 @@ class TemporalHead(nn.Module):
             }
         else:
             # 分类输出
-            logits = self.classifier(pooled)  # [B, num_classes]
+            if self.evidence_aggregator is None:
+                logits = self.classifier(pooled)  # [B, num_classes]
             result = {"logits": logits}
+            if frame_logits is not None:
+                result["frame_logits"] = frame_logits
 
         if self.use_front_back_auxiliary:
             result["front_back_logits"] = self.front_back_classifier(pooled)

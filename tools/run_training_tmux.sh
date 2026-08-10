@@ -26,15 +26,14 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 mapfile -t CFG_VALUES < <(
-  "$PYTHON_BIN" - <<'PY' "$CONFIG_PATH"
+  "$PYTHON_BIN" - "$CONFIG_PATH" "$@" <<'PY'
 import sys
-import yaml
 
-with open(sys.argv[1], "r", encoding="utf-8") as f:
-    cfg = yaml.safe_load(f)
+from utils.config import load_config
 
-print(cfg["output"]["save_dir"])
-print(cfg["output"]["log_dir"])
+cfg = load_config("configs/default.yaml", ["--config", sys.argv[1], *sys.argv[2:]])
+print(cfg.output.save_dir)
+print(cfg.output.log_dir)
 PY
 )
 
@@ -44,6 +43,7 @@ LOG_DIR="${CFG_VALUES[1]}"
 mkdir -p "$SAVE_DIR" "$LOG_DIR"
 
 STATUS_FILE="$LOG_DIR/train_status_tmux.txt"
+CONSOLE_FILE="$LOG_DIR/train_console_tmux.log"
 CMD_FILE="$LOG_DIR/launch_command_tmux.sh"
 RUNNER_FILE="$LOG_DIR/run_in_tmux.sh"
 LATEST_CKPT="$SAVE_DIR/latest.pth"
@@ -68,10 +68,20 @@ done
 
 SAFE_ARGS=()
 if [[ "$HAS_NUM_WORKERS_OVERRIDE" -eq 0 ]]; then
-  SAFE_ARGS=(--train.num_workers 0)
+  SAFE_ARGS=(--train.num_workers 8)
+fi
+
+TRAIN_PREFIX=()
+if [[ -n "${DOA_CUDA_VISIBLE_DEVICES:-}" ]]; then
+  TRAIN_PREFIX=(
+    env
+    "CUDA_DEVICE_ORDER=PCI_BUS_ID"
+    "CUDA_VISIBLE_DEVICES=${DOA_CUDA_VISIBLE_DEVICES}"
+  )
 fi
 
 TRAIN_CMD=(
+  "${TRAIN_PREFIX[@]}"
   "$PYTHON_BIN" -u train.py
   --config "$CONFIG_PATH"
   "${RESUME_ARGS[@]}"
@@ -93,11 +103,12 @@ cd $(printf '%q' "$ROOT_DIR")
   echo "config=$(printf '%q' "$CONFIG_PATH")"
   echo "save_dir=$(printf '%q' "$SAVE_DIR")"
   echo "log_dir=$(printf '%q' "$LOG_DIR")"
+  echo "console_log=$(printf '%q' "$CONSOLE_FILE")"
   echo "resume_from=$(printf '%q' "${LATEST_CKPT}")"
   echo "launch_command=$(cat "$CMD_FILE")"
 } > $(printf '%q' "$STATUS_FILE")
 set +e
-$(cat "$CMD_FILE")
+$(cat "$CMD_FILE") >> $(printf '%q' "$CONSOLE_FILE") 2>&1
 EXIT_CODE=\$?
 set -e
 {

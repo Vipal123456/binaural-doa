@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Optional, Sequence
 
 
 class DOALoss(nn.Module):
@@ -32,6 +33,10 @@ class DOALoss(nn.Module):
         front_back_aux_weight: float = 0.0,
         front_back_focus_weight: float = 0.0,
         front_back_focus_window_deg: float = 20.0,
+        class_angles_deg: Optional[Sequence[float]] = None,
+        expected_angle_distance_weight: float = 0.0,
+        angular_distance_normalizer_deg: float = 180.0,
+        frame_aux_weight: float = 0.0,
     ):
         super().__init__()
         self.ce = nn.CrossEntropyLoss(label_smoothing=label_smoothing, reduction='none')
@@ -43,11 +48,27 @@ class DOALoss(nn.Module):
         self.front_back_aux_weight = float(front_back_aux_weight)
         self.front_back_focus_weight = float(front_back_focus_weight)
         self.front_back_focus_window_deg = float(front_back_focus_window_deg)
+        self.expected_angle_distance_weight = float(expected_angle_distance_weight)
+        self.angular_distance_normalizer_deg = float(angular_distance_normalizer_deg)
+        self.frame_aux_weight = float(frame_aux_weight)
+        if self.angular_distance_normalizer_deg <= 0:
+            raise ValueError("angular_distance_normalizer_deg must be positive")
+        if class_angles_deg is not None and self.anti_confusion_weight > 0:
+            raise ValueError(
+                "anti_confusion_weight assumes uniform full-circle classes and "
+                "cannot be used with class_angles_deg"
+            )
 
         # 预计算每个bin的中心角（弧度）用于构造圆周软标签。
-        centers_deg = -180.0 + (torch.arange(num_classes).float() + 0.5) * (360.0 / num_classes)
+        if class_angles_deg is None:
+            centers_deg = -180.0 + (torch.arange(num_classes).float() + 0.5) * (360.0 / num_classes)
+        else:
+            if len(class_angles_deg) != num_classes:
+                raise ValueError("class_angles_deg must contain exactly num_classes values")
+            centers_deg = torch.as_tensor(class_angles_deg, dtype=torch.float32)
         centers_rad = torch.deg2rad(centers_deg)
         self.register_buffer("bin_centers_rad", centers_rad, persistent=False)
+        self.register_buffer("bin_centers_deg", centers_deg, persistent=False)
 
     def forward(
         self,
@@ -56,6 +77,8 @@ class DOALoss(nn.Module):
         front_back_logits: torch.Tensor = None,
         front_back_targets: torch.Tensor = None,
         front_back_focus_distance_deg: torch.Tensor = None,
+        frame_logits: torch.Tensor = None,
+        frame_weights: torch.Tensor = None,
     ) -> dict:
         """
         参数:
@@ -100,6 +123,36 @@ class DOALoss(nn.Module):
             circular_loss = -(soft_targets * log_probs).sum(dim=-1)       # [B]
             total_loss = total_loss + self.circular_soft_label_weight * circular_loss
 
+        expected_angle_distance = None
+        if self.expected_angle_distance_weight > 0:
+            centers_deg = self.bin_centers_deg.to(device=logits.device, dtype=logits.dtype)
+            target_deg = centers_deg[targets]
+            distance_deg = (centers_deg.unsqueeze(0) - target_deg.unsqueeze(1)).abs()
+            distance_deg = torch.minimum(distance_deg, 360.0 - distance_deg)
+            probability = torch.softmax(logits, dim=-1)
+            expected_angle_distance = (probability * distance_deg).sum(dim=-1)
+            total_loss = total_loss + self.expected_angle_distance_weight * (
+                expected_angle_distance / self.angular_distance_normalizer_deg
+            )
+
+        frame_loss_value = None
+        if self.frame_aux_weight > 0:
+            if frame_logits is None:
+                raise ValueError("frame_aux_weight > 0 requires frame_logits")
+            bsz, time_steps, num_classes = frame_logits.shape
+            frame_targets = targets.unsqueeze(1).expand(bsz, time_steps).reshape(-1)
+            frame_loss = self.ce(frame_logits.reshape(-1, num_classes), frame_targets).reshape(
+                bsz, time_steps
+            )
+            if frame_weights is None:
+                frame_loss = frame_loss.mean(dim=1)
+            else:
+                weights = frame_weights.squeeze(-1).detach()
+                weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1.0e-6)
+                frame_loss = (frame_loss * weights).sum(dim=1)
+            frame_loss_value = frame_loss.mean()
+            total_loss = total_loss + self.frame_aux_weight * frame_loss
+
         sample_weights = None
         if self.front_back_focus_weight > 0 and front_back_focus_distance_deg is not None:
             within_window = front_back_focus_distance_deg <= self.front_back_focus_window_deg
@@ -123,6 +176,10 @@ class DOALoss(nn.Module):
         return {
             "total": total_loss,
             "classification": ce_loss.mean().item(),
+            "expected_angle_distance": (
+                None if expected_angle_distance is None else expected_angle_distance.mean().item()
+            ),
+            "frame_aux": None if frame_loss_value is None else frame_loss_value.item(),
             "front_back": None if front_back_loss_value is None else front_back_loss_value.item(),
         }
 

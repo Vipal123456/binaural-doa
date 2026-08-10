@@ -1,7 +1,7 @@
 """DOA 分类的评估指标。"""
 
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 from utils.angle import bins_to_angles, angular_error, wrap_angles
 
@@ -21,9 +21,22 @@ class DOAMetrics:
         self,
         num_classes: int = 72,
         azimuth_range: Tuple[float, float] = (-180.0, 180.0),
+        class_angles_deg: Optional[Sequence[float]] = None,
     ):
         self.num_classes = num_classes
         self.azimuth_range = azimuth_range
+        self.class_angles_deg = (
+            None
+            if class_angles_deg is None
+            else np.asarray(class_angles_deg, dtype=np.float64)
+        )
+        if self.class_angles_deg is not None:
+            if self.class_angles_deg.ndim != 1 or len(self.class_angles_deg) != num_classes:
+                raise ValueError(
+                    "class_angles_deg must contain exactly num_classes values"
+                )
+            if len(np.unique(self.class_angles_deg)) != num_classes:
+                raise ValueError("class_angles_deg values must be unique")
         self.reset()
 
     def reset(self) -> None:
@@ -146,7 +159,12 @@ class DOAMetrics:
 
         # --- 2. 平均角度误差 ---
         # 分类bin预测角度
-        cls_pred_degs = bins_to_angles(pred_bins, self.num_classes, self.azimuth_range)
+        cls_pred_degs = bins_to_angles(
+            pred_bins,
+            self.num_classes,
+            self.azimuth_range,
+            self.class_angles_deg,
+        )
 
         # 混合预测策略：分类粗定位 + 回归微调
         if len(self._pred_degs) > 0:
@@ -174,7 +192,12 @@ class DOAMetrics:
         if len(self._true_degs) > 0:
             true_degs = np.concatenate(self._true_degs)
         else:
-            true_degs = bins_to_angles(true_bins, self.num_classes, self.azimuth_range)
+            true_degs = bins_to_angles(
+                true_bins,
+                self.num_classes,
+                self.azimuth_range,
+                self.class_angles_deg,
+            )
 
         ang_err = angular_error(pred_degs, true_degs)  # [N]
         results["mean_angular_error"] = float(ang_err.mean())
@@ -194,17 +217,19 @@ class DOAMetrics:
         true_fb = self._front_back_labels(true_degs)
         results["front_back_halfplane_error_rate"] = float((pred_fb != true_fb).sum()) / max(N, 1)
 
-        circular_bin_diff = np.abs(pred_bins - true_bins)
-        circular_bin_diff = np.minimum(circular_bin_diff, self.num_classes - circular_bin_diff)
-        half_bins = self.num_classes // 2
-
-        # near-bin: 落在真实bin及其相邻bin内（圆周意义下）
-        results["within_1bin_acc"] = float((circular_bin_diff <= 1).sum()) / max(N, 1)
-
-        # opposite: 典型180°翻转，允许 ±1 bin 容差
-        results["opposite_error_rate"] = float(
-            (np.abs(circular_bin_diff - half_bins) <= 1).sum()
-        ) / max(N, 1)
+        if self.class_angles_deg is None:
+            circular_bin_diff = np.abs(pred_bins - true_bins)
+            circular_bin_diff = np.minimum(circular_bin_diff, self.num_classes - circular_bin_diff)
+            half_bins = self.num_classes // 2
+            results["within_1bin_acc"] = float((circular_bin_diff <= 1).sum()) / max(N, 1)
+            results["opposite_error_rate"] = float(
+                (np.abs(circular_bin_diff - half_bins) <= 1).sum()
+            ) / max(N, 1)
+        else:
+            # 非均匀、非全圆方向集不能用类别索引差近似角度关系。
+            class_index_diff = np.abs(pred_bins - true_bins)
+            results["within_1bin_acc"] = float((class_index_diff <= 1).sum()) / max(N, 1)
+            results["opposite_error_rate"] = float((ang_err >= 170.0).sum()) / max(N, 1)
 
         # large error: 明显大错，默认定义为角误差 >= 45°
         results["large_error_rate"] = float((ang_err >= 45.0).sum()) / max(N, 1)

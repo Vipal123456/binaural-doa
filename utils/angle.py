@@ -6,7 +6,7 @@
 
 import numpy as np
 import torch
-from typing import Tuple
+from typing import Optional, Sequence, Tuple
 
 
 # ======================================================================
@@ -74,8 +74,24 @@ def angles_to_bins(angles: np.ndarray,
 
 def bins_to_angles(bins: np.ndarray,
                    num_classes: int = 72,
-                   azimuth_range: Tuple[float, float] = (-180.0, 180.0)) -> np.ndarray:
-    """:func:`bin_to_angle` 的向量化版本。"""
+                   azimuth_range: Tuple[float, float] = (-180.0, 180.0),
+                   class_angles_deg: Optional[Sequence[float]] = None) -> np.ndarray:
+    """:func:`bin_to_angle` 的向量化版本。
+
+    ``class_angles_deg`` 用于 CIPIC 这类非均匀候选方向。提供该参数时，
+    类别索引直接查表转换，不再根据 ``azimuth_range`` 均匀划分。
+    """
+    bins = np.asarray(bins, dtype=np.int64)
+    if class_angles_deg is not None:
+        centers = np.asarray(class_angles_deg, dtype=np.float64)
+        if centers.ndim != 1 or len(centers) != num_classes:
+            raise ValueError(
+                "class_angles_deg must be a 1-D sequence with "
+                f"num_classes={num_classes} entries"
+            )
+        if np.any((bins < 0) | (bins >= num_classes)):
+            raise ValueError("Class index is outside class_angles_deg")
+        return centers[bins]
     lo, hi = azimuth_range
     bin_width = (hi - lo) / num_classes
     return lo + bins * bin_width

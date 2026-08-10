@@ -1,5 +1,7 @@
 """独立评估（测试集），包含指标报告和可选的混淆矩阵可视化。"""
 
+import json
+import math
 import os
 
 import numpy as np
@@ -39,6 +41,7 @@ class Evaluator:
         self.metrics = DOAMetrics(
             num_classes=m.num_classes,
             azimuth_range=tuple(m.azimuth_range),
+            class_angles_deg=m.get("class_angles_deg", None),
         )
         self.use_amp = cfg.train.amp and self.device.type == "cuda"
 
@@ -93,12 +96,24 @@ class Evaluator:
         for k, v in results.items():
             self.logger.info(f"  {k}: {v:.4f}")
 
+        serializable_results = {
+            key: (float(value) if math.isfinite(float(value)) else None)
+            for key, value in results.items()
+        }
+        results_path = os.path.join(self.cfg.output.log_dir, "test_results.json")
+        with open(results_path, "w", encoding="utf-8") as handle:
+            json.dump(serializable_results, handle, indent=2, sort_keys=True)
+        self.logger.info(f"  结构化测试结果已保存至 {results_path}")
+
         if save_cm:
             cm = self.metrics.confusion_matrix()
             m = self.cfg.model
             num_classes = m.num_classes
             angles = bins_to_angles(
-                np.arange(num_classes), num_classes, tuple(m.azimuth_range)
+                np.arange(num_classes),
+                num_classes,
+                tuple(m.azimuth_range),
+                m.get("class_angles_deg", None),
             )
             labels_str = [f"{a:.0f}°" for a in angles]
             cm_path = os.path.join(self.cfg.output.log_dir, "confusion_matrix.png")

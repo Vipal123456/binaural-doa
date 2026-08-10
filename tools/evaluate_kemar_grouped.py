@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate a KEMAR static checkpoint and summarize grouped test metrics.
+"""Evaluate a flat-layout static checkpoint and summarize grouped metrics.
 
 This tool is designed for the flat-layout KEMAR + SofaMyRoom dataset:
 
@@ -50,6 +50,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--device", type=str, default=None, help="Override cfg.train.device, e.g. cpu or cuda:0")
+    parser.add_argument(
+        "--cue_stat_mode",
+        type=str,
+        default=None,
+        help="Override model.cue_stat_mode (used by controlled oracle evaluations)",
+    )
+    parser.add_argument(
+        "--cue_target_bias_mode",
+        type=str,
+        default=None,
+        help="Override the target-aware CPSD injection for controlled diagnostics",
+    )
+    parser.add_argument(
+        "--component_supervision",
+        action="store_true",
+        help="Load aligned target/interferer component spectra from the dataset root",
+    )
     parser.add_argument("--log_interval", type=int, default=20, help="Print progress every N batches")
     return parser.parse_args()
 
@@ -62,6 +79,16 @@ def normalize_snr_label(value: str) -> str:
     if abs(numeric - round(numeric)) < 1e-6:
         return str(int(round(numeric)))
     return f"{numeric:.2f}"
+
+
+def snr_sort_key(label: str) -> tuple[int, float | str]:
+    """Sort clean first, numeric SNRs high-to-low, then unknown labels."""
+    if label == "clean":
+        return (0, 0.0)
+    try:
+        return (1, -float(label))
+    except ValueError:
+        return (2, label)
 
 
 def front_back_label(angle_deg: np.ndarray) -> np.ndarray:
@@ -141,7 +168,12 @@ def collect_rows(
         pred_bins = logits.argmax(axis=-1)
         true_bins = batch["azimuth_label"].cpu().numpy()
         true_deg = batch["azimuth_deg"].cpu().numpy()
-        pred_deg = bins_to_angles(pred_bins, num_classes, azimuth_range)
+        pred_deg = bins_to_angles(
+            pred_bins,
+            num_classes,
+            azimuth_range,
+            getattr(cfg.model, "class_angles_deg", None),
+        )
         err_deg = angular_error(pred_deg, true_deg)
 
         pred_fb = front_back_label(pred_deg)
@@ -163,8 +195,21 @@ def collect_rows(
                     "fb_err": int(pred_fb[local_idx] != true_fb[local_idx]),
                     "opp_err": int(err_deg[local_idx] > 150.0),
                     "large_err": int(err_deg[local_idx] >= 45.0),
-                    "snr": normalize_snr_label(meta["snr_db"]),
-                    "scene": str(meta["noise_scene"]),
+                    "snr": normalize_snr_label(
+                        meta.get(
+                            "target_sir_db",
+                            meta.get("snr_db", meta.get("target_snr_db")),
+                        )
+                    ),
+                    "rt60_s": float(meta.get("rt60_s", "nan")),
+                    "distance_m": float(meta.get("distance_m", "nan")),
+                    "subject_id": str(meta.get("subject_id", "unknown")),
+                    "room_id": str(meta.get("room_id", "unknown")),
+                    "scene": str(meta.get("demand_scene", meta.get("noise_scene", "unknown"))),
+                    "condition": str(meta.get("condition", "")),
+                    "diffuse_snr_db": str(meta.get("target_diffuse_snr_db", "")),
+                    "angular_separation_deg": float(meta.get("angular_separation_deg", "nan")),
+                    "paired_test_key": str(meta.get("paired_test_key", "")),
                 }
             )
         global_idx += batch_size_now
@@ -194,6 +239,12 @@ def main() -> None:
         cfg.train.batch_size = int(args.batch_size)
     if args.device is not None:
         cfg.train.device = str(args.device)
+    if args.cue_stat_mode is not None:
+        cfg.model.cue_stat_mode = str(args.cue_stat_mode)
+    if args.cue_target_bias_mode is not None:
+        cfg.model.cue_target_bias_mode = str(args.cue_target_bias_mode)
+    if args.component_supervision:
+        cfg.dataset.component_supervision_enabled = True
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -215,19 +266,41 @@ def main() -> None:
 
     overall = summarize(rows)
 
-    snr_order = ["clean", "10", "5", "0", "-5", "-10", "-15"]
     by_snr_rows = []
-    for key in snr_order:
-        if key in snr_groups:
-            by_snr_rows.append({"snr": key, **summarize(snr_groups[key])})
+    for key in sorted(snr_groups, key=snr_sort_key):
+        by_snr_rows.append({"snr": key, **summarize(snr_groups[key])})
 
     by_scene_rows = []
     for key in sorted(scene_groups):
         by_scene_rows.append({"scene": key, **summarize(scene_groups[key])})
 
+    # The directional DNS test protocol is the union of two controlled sweeps.
+    # Keep the fixed variable explicit so 5 dB samples from different RT60s are
+    # not accidentally interpreted as one by-SIR condition.
+    sir_sweep_groups: Dict[str, List[dict]] = defaultdict(list)
+    rt60_sweep_groups: Dict[float, List[dict]] = defaultdict(list)
+    for row in rows:
+        if np.isfinite(row["rt60_s"]) and abs(row["rt60_s"] - 0.6) < 1e-6:
+            sir_sweep_groups[row["snr"]].append(row)
+        try:
+            sir_value = float(row["snr"])
+        except ValueError:
+            sir_value = float("nan")
+        if np.isfinite(sir_value) and abs(sir_value - 5.0) < 1e-6:
+            rt60_sweep_groups[row["rt60_s"]].append(row)
+
+    by_sir_sweep_rows = [
+        {"sir_db": key, **summarize(sir_sweep_groups[key])}
+        for key in sorted(sir_sweep_groups, key=snr_sort_key)
+    ]
+    by_rt60_sweep_rows = [
+        {"rt60_s": key, **summarize(rt60_sweep_groups[key])}
+        for key in sorted(rt60_sweep_groups)
+    ]
+
     write_csv(
         output_dir / "per_sample.csv",
-        ["file_id", "true_deg", "pred_deg", "true_bin", "pred_bin", "error_deg", "correct", "fb_err", "opp_err", "large_err", "snr", "scene"],
+        ["file_id", "true_deg", "pred_deg", "true_bin", "pred_bin", "error_deg", "correct", "fb_err", "opp_err", "large_err", "snr", "diffuse_snr_db", "rt60_s", "distance_m", "subject_id", "room_id", "scene", "condition", "angular_separation_deg", "paired_test_key"],
         rows,
     )
     write_csv(
@@ -239,6 +312,16 @@ def main() -> None:
         output_dir / "by_scene.csv",
         ["scene", "count", "accuracy", "mae", "median", "acc_at_5", "acc_at_10", "fb_err", "opp_err", "large_err"],
         by_scene_rows,
+    )
+    write_csv(
+        output_dir / "by_sir_sweep_rt60_0p6.csv",
+        ["sir_db", "count", "accuracy", "mae", "median", "acc_at_5", "acc_at_10", "fb_err", "opp_err", "large_err"],
+        by_sir_sweep_rows,
+    )
+    write_csv(
+        output_dir / "by_rt60_sweep_sir_5.csv",
+        ["rt60_s", "count", "accuracy", "mae", "median", "acc_at_5", "acc_at_10", "fb_err", "opp_err", "large_err"],
+        by_rt60_sweep_rows,
     )
     (output_dir / "overall.json").write_text(
         json.dumps(overall, indent=2, ensure_ascii=False) + "\n",

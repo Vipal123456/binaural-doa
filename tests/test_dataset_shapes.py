@@ -62,6 +62,46 @@ class TestFeatureExtractor:
         assert feats["ipd"].min() >= -np.pi - 0.01
         assert feats["ipd"].max() <= np.pi + 0.01
 
+    def test_cpsd_cue_preserves_legacy_coherence(self):
+        torch.manual_seed(0)
+        audio = torch.randn(2, 16000)
+        legacy = FeatureExtractor(n_fft=512, hop_length=160, win_length=400)
+        cpsd = FeatureExtractor(
+            n_fft=512,
+            hop_length=160,
+            win_length=400,
+            spatial_statistics_mode="cpsd_cue",
+            spatial_statistics_time_frames=5,
+        )
+        legacy_feats = legacy.extract(audio)
+        cpsd_feats = cpsd.extract(audio)
+        assert torch.equal(legacy_feats["coherence"], cpsd_feats["coherence"])
+        assert not torch.allclose(legacy_feats["ild"], cpsd_feats["ild"])
+        assert not torch.allclose(legacy_feats["ipd"], cpsd_feats["ipd"])
+
+    def test_cpsd_all_outputs_are_finite_and_coherence_is_bounded(self):
+        audio = torch.randn(2, 16000)
+        fe = FeatureExtractor(
+            n_fft=512,
+            hop_length=160,
+            win_length=400,
+            spatial_statistics_mode="cpsd_all",
+            spatial_statistics_time_frames=5,
+        )
+        feats = fe.extract(audio)
+        for key in ("ild", "ipd_sin", "ipd_cos", "coherence"):
+            assert torch.isfinite(feats[key]).all()
+        assert feats["coherence"].min() >= 0.0
+        assert feats["coherence"].max() <= 1.0
+
+    @pytest.mark.parametrize("time_frames", [0, 2, 4])
+    def test_cpsd_window_must_be_positive_and_odd(self, time_frames):
+        with pytest.raises(ValueError):
+            FeatureExtractor(
+                spatial_statistics_mode="cpsd_cue",
+                spatial_statistics_time_frames=time_frames,
+            )
+
 
 class TestAngleUtils:
     """验证角度转换和误差计算。"""

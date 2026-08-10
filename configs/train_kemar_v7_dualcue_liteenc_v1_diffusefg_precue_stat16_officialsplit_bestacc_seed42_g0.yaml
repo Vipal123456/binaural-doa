@@ -1,0 +1,87 @@
+dataset:
+  root_dir: data/kemar_sofamyroom/train_20h_minimal_diffusefg/train
+  dataset_type: static
+  sample_rate: 16000
+  segment_seconds: 2.0
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  split_seed: 42
+  train_root: data/kemar_sofamyroom/train_20h_minimal_diffusefg/train
+  val_root: data/kemar_sofamyroom/val_4h_diffusefg_officialsplit/val
+  test_root: data/kemar_sofamyroom_diffusefg_static_v1_test_officialsplit/test
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: hann
+
+model:
+  type: native_lite_v7_dual_cue_concat
+  encoder_channels: [16, 24, 32]
+  encoder_out_dim: 64
+  encoder_variant: v2_balanced
+  content_encoder_type: lite_v1
+  content_input_mode: logmag
+  content_relation_mode: mean_diff_absdiff
+  content_fusion_dim: 80
+  lite_cue_bands: 16
+  cue_band_mode: uniform
+  cue_stat_mode: precue_stat
+  cue_delay_max_ms: 1.0
+  cue_delay_bins: 33
+  cue_delay_temperature: 20.0
+  lite_cue_hidden_dim: 48
+  cue_value_out_dim: 24
+  cue_reliability_out_dim: 8
+  lite_cue_kernel_size: 3
+  lite_cue_encoder_type: temporal_conv
+  dual_cue_fusion_mode: concat
+  cue_branch_mode: dual
+  dual_cue_use_tf_mask: false
+  dual_cue_tf_mask_hidden_channels: 8
+  dual_cue_tf_mask_residual_scale: 1.0
+  use_cross_ear_interaction: false
+  temporal_encoder_type: gru
+  gru_hidden_size: 80
+  gru_num_layers: 1
+  gru_dropout: 0.1
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.2
+  use_front_back_auxiliary: true
+  use_attention_pooling: true
+  use_regression: false
+  use_pure_regression: false
+
+train:
+  batch_size: 64
+  num_workers: 8
+  epochs: 100
+  lr: 0.0005
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+  scheduler: cosine
+  step_size: 30
+  step_gamma: 0.1
+  cosine_T_max: 100
+  cosine_eta_min: 1.0e-05
+  amp: false
+  device: cuda:0
+  grad_clip: 1.0
+  anti_confusion_weight: 0.0
+  circular_soft_label_weight: 0.0
+  circular_kappa: 4.0
+  front_back_aux_weight: 0.3
+  front_back_focus_weight: 0.0
+  front_back_focus_window_deg: 20.0
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+  early_stopping_metric: accuracy
+  early_stopping_min_delta: 0.0001
+
+output:
+  save_dir: outputs/checkpoints_kemar_v7_dualcue_liteenc_v1_diffusefg_precue_stat16_officialsplit_bestacc_seed42_g0
+  log_dir: outputs/logs_kemar_v7_dualcue_liteenc_v1_diffusefg_precue_stat16_officialsplit_bestacc_seed42_g0

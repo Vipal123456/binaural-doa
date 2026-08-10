@@ -1,0 +1,131 @@
+dataset:
+  root_dir: /disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_static_hybridbrir_gate2_50h_v1/train_subjects
+  dataset_type: static
+  sample_rate: 16000
+  segment_seconds: 2.0
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  split_seed: 42
+  train_root: /disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_static_hybridbrir_gate2_50h_v1/train_subjects
+  val_root: /disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_static_hybridbrir_gate2_50h_v1/val_subjects
+  test_root: /disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_static_hybridbrir_gate2_50h_v1/test_subjects_unseen
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: hann
+model:
+  type: native_lite_v7_lite_cue_concat
+  encoder_channels:
+  - 24
+  - 40
+  - 64
+  encoder_out_dim: 96
+  content_input_mode: logmag
+  use_cue_stream: true
+  cue_feature_mode: all
+  content_relation_mode: mean_diff_absdiff
+  cue_encoder_channels:
+  - 8
+  - 16
+  - 24
+  cue_encoder_out_dim: 32
+  content_fusion_dim: 80
+  early_fusion_dim: 80
+  lite_cue_bands: 16
+  lite_cue_hidden_dim: 48
+  lite_cue_kernel_size: 3
+  lite_cue_encoder_type: temporal_conv
+  cue_value_out_dim: 24
+  cue_reliability_out_dim: 8
+  dual_cue_fusion_mode: concat
+  dual_cue_use_tf_mask: false
+  dual_cue_tf_mask_hidden_channels: 8
+  dual_cue_tf_mask_residual_scale: 1.0
+  favit_cue_input_mode: ild_ipd
+  favit_time_bins: 16
+  favit_num_patches: 16
+  favit_embed_dim: 64
+  favit_depth: 6
+  favit_num_heads: 4
+  favit_mlp_ratio: 4.0
+  bil_gcc_bins: 64
+  bil_cnn_channels:
+  - 32
+  - 64
+  - 96
+  bil_f_pool_size:
+  - 2
+  - 2
+  - 2
+  bil_t_pool_size:
+  - 1
+  - 1
+  - 1
+  bil_kernel_size:
+  - 3
+  - 3
+  bil_gru_hidden_size: 96
+  bil_gru_num_layers: 1
+  bil_bidirectional: true
+  bil_mlp_hidden_size: 128
+  use_cross_ear_interaction: false
+  cue_bands: 32
+  cue_hidden_dim: 64
+  fusion_dim: 160
+  proj_dim: 128
+  prior_hidden_dim: 256
+  prior_out_dim: 128
+  attention_dim: 128
+  num_heads: 4
+  gate_dim: 128
+  use_gating: true
+  temporal_encoder_type: gru
+  mamba_num_layers: 2
+  mamba_state_dim: 16
+  mamba_expand_factor: 2
+  mamba_conv_kernel: 4
+  gru_hidden_size: 80
+  gru_num_layers: 1
+  gru_dropout: 0.1
+  num_classes: 72
+  azimuth_range:
+  - -180
+  - 180
+  dropout: 0.2
+  use_front_back_auxiliary: true
+  use_simple_binaural_fusion: false
+  use_simple_cross_attention: false
+  use_raw_ipd: true
+  encoder_variant: v2_balanced
+  use_attention_pooling: true
+  use_regression: false
+  use_pure_regression: false
+train:
+  batch_size: 64
+  num_workers: 8
+  epochs: 100
+  lr: 0.0005
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+  scheduler: cosine
+  step_size: 30
+  step_gamma: 0.1
+  cosine_T_max: 100
+  cosine_eta_min: 1.0e-05
+  amp: false
+  device: cuda
+  grad_clip: 1.0
+  anti_confusion_weight: 0.0
+  circular_soft_label_weight: 0.0
+  circular_kappa: 4.0
+  front_back_aux_weight: 0.3
+  front_back_focus_weight: 0.0
+  front_back_focus_window_deg: 20.0
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+output:
+  save_dir: outputs/checkpoints_static_hybridbrir_gate2_50h_v1_v7_litecueenc_concat_all_cf80_gru80
+  log_dir: outputs/logs_static_hybridbrir_gate2_50h_v1_v7_litecueenc_concat_all_cf80_gru80

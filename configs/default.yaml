@@ -61,6 +61,35 @@ model:
   dual_cue_use_tf_mask: false
   dual_cue_tf_mask_hidden_channels: 8
   dual_cue_tf_mask_residual_scale: 1.0
+  dual_cue_use_precompression_reliability_pooling: false
+  dual_cue_precompression_pool_hidden_channels: 8
+  dual_cue_precompression_pool_residual_scale: 1.0
+  cue_specific_local_hidden_channels: 8
+  cue_specific_local_ild_scale_db: 20.0
+  cue_specific_local_ild_clip_db: 40.0
+  cue_specific_local_use_band_projection: false
+  cue_specific_local_band_split_hz: 1500.0
+  cue_specific_local_band_projection_residual_scale: 1.0
+  cue_specific_local_use_joint_correction: false
+  cue_specific_local_joint_correction_residual_scale: 1.0
+  cue_specific_local_use_coherence_context: true
+  cue_specific_local_use_cue_consistency_context: false
+  cue_specific_local_use_standalone_coherence: true
+  use_branchwise_fusion_norm: false
+  cue_specific_local_use_fine_to_coarse_refinement: false
+  cue_specific_local_fine_to_coarse_residual_scale: 1.0
+  cue_specific_local_block_type: "standard"
+  cue_specific_local_ild_spectral_kernel_size: 7
+  cue_specific_local_ipd_spectral_kernel_size: 3
+  cue_progressive_aggregation: "mean"
+  cue_progressive_channels: [8, 12, 16]
+  cue_progressive_temporal_dilations: [1, 2, 4]
+  cue_progressive_ild_kernel_size: 7
+  cue_progressive_ipd_kernel_size: 3
+  cue_progressive_out_dim: 32
+  cue_progressive_coherence_beta_init: 0.5
+  cue_rw_cpsd_coefficient_mode: "global"
+  cue_rw_cpsd_frequency_anchors: 8
   favit_cue_input_mode: "ild_ipd"
   favit_time_bins: 16
   favit_num_patches: 16
@@ -99,6 +128,7 @@ model:
 
   # 时序建模（BiGRU）
   temporal_encoder_type: "gru"
+  temporal_aggregation_type: "attention"
   mamba_num_layers: 2
   mamba_state_dim: 16
   mamba_expand_factor: 2
@@ -151,6 +181,10 @@ train:
   front_back_aux_weight: 0.0
   front_back_focus_weight: 0.0
   front_back_focus_window_deg: 20.0
+  expected_angle_distance_weight: 0.0
+  angular_distance_normalizer_deg: 180.0
+  frame_aux_weight: 0.0
+  cue_uncertainty_aux_weight: 0.0
 
   # 日志记录间隔（批次数）
   log_interval: 20

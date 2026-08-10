@@ -1,0 +1,53 @@
+dataset:
+  dataset_type: "moving"
+  sample_rate: 16000
+  segment_seconds: 4.0
+  label_steps: 40
+  label_source: "rendered"
+  train_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_moving_hybridbrir_gate2_50h_v1/train_subjects"
+  val_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_moving_hybridbrir_gate2_50h_v1/val_subjects"
+  test_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_moving_hybridbrir_gate2_50h_v1/test_subjects_unseen"
+  split_seed: 42
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: "hann"
+
+model:
+  type: "moving_bil_style_gccphat_crn_72cls"
+  bil_gcc_bins: 64
+  bil_cnn_channels: [128, 128, 128]
+  bil_f_pool_size: [2, 2, 2]
+  bil_t_pool_size: [1, 1, 1]
+  bil_kernel_size: [3, 3]
+  bil_gru_hidden_size: 128
+  bil_gru_num_layers: 2
+  bil_bidirectional: false
+  label_steps: 40
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.0
+  use_front_back_auxiliary: false
+
+train:
+  batch_size: 16
+  num_workers: 8
+  epochs: 60
+  lr: 0.0005
+  weight_decay: 0.0001
+  scheduler: "cosine"
+  cosine_T_max: 60
+  cosine_eta_min: 0.00001
+  amp: true
+  device: "cuda:4"
+  grad_clip: 1.0
+  front_back_aux_weight: 0.0
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+
+output:
+  save_dir: "outputs/checkpoints_moving_hybridbrir_gate2_50h_v1_bilstyle_gccphat_crn72_rendered"
+  log_dir: "outputs/logs_moving_hybridbrir_gate2_50h_v1_bilstyle_gccphat_crn72_rendered"

@@ -34,6 +34,7 @@ from models.native_lite_v7 import (
     NativeLiteCueConcatDOANet,
     NativeLiteLiteCueConcatDOANet,
     NativeLiteDualCueConcatDOANet,
+    NativeLiteLatentCrossSpectrumDOANet,
     NativeLiteContentOnlyDOANet,
     NativeLiteEarlyFusionDOANet,
 )
@@ -549,6 +550,7 @@ def build_model(cfg):
             gru_dropout=m.gru_dropout,
             num_classes=m.num_classes,
             azimuth_range=tuple(m.azimuth_range),
+            class_angles_deg=getattr(m, "class_angles_deg", None),
             dropout=m.dropout,
             use_attention_pooling=getattr(m, "use_attention_pooling", True),
             attention_pooling_variant=getattr(m, "attention_pooling_variant", "default"),
@@ -639,6 +641,8 @@ def build_model(cfg):
             content_input_mode=getattr(m, "content_input_mode", "logmag"),
             content_relation_mode=getattr(m, "content_relation_mode", "mean_diff_absdiff"),
             content_fusion_dim=getattr(m, "content_fusion_dim", 80),
+            content_ear_token_dim=getattr(m, "content_ear_token_dim", 24),
+            content_ear_token_heads=getattr(m, "content_ear_token_heads", 4),
             lite_cue_bands=getattr(m, "lite_cue_bands", 16),
             cue_band_mode=getattr(m, "cue_band_mode", "uniform"),
             cue_sample_rate=getattr(cfg.dataset, "sample_rate", 16000),
@@ -661,11 +665,118 @@ def build_model(cfg):
             dual_cue_use_tf_mask=getattr(m, "dual_cue_use_tf_mask", False),
             dual_cue_tf_mask_hidden_channels=getattr(m, "dual_cue_tf_mask_hidden_channels", 8),
             dual_cue_tf_mask_residual_scale=getattr(m, "dual_cue_tf_mask_residual_scale", 1.0),
+            dual_cue_use_precompression_reliability_pooling=getattr(
+                m, "dual_cue_use_precompression_reliability_pooling", False
+            ),
+            dual_cue_precompression_pool_hidden_channels=getattr(
+                m, "dual_cue_precompression_pool_hidden_channels", 8
+            ),
+            dual_cue_precompression_pool_residual_scale=getattr(
+                m, "dual_cue_precompression_pool_residual_scale", 1.0
+            ),
+            cue_specific_local_hidden_channels=getattr(m, "cue_specific_local_hidden_channels", 8),
+            cue_specific_local_ild_scale_db=getattr(m, "cue_specific_local_ild_scale_db", 20.0),
+            cue_specific_local_ild_clip_db=getattr(m, "cue_specific_local_ild_clip_db", 40.0),
+            cue_specific_local_use_band_projection=getattr(
+                m, "cue_specific_local_use_band_projection", False
+            ),
+            cue_specific_local_band_split_hz=getattr(
+                m, "cue_specific_local_band_split_hz", 1500.0
+            ),
+            cue_specific_local_band_projection_residual_scale=getattr(
+                m, "cue_specific_local_band_projection_residual_scale", 1.0
+            ),
+            cue_specific_local_use_joint_correction=getattr(
+                m, "cue_specific_local_use_joint_correction", False
+            ),
+            cue_specific_local_joint_correction_residual_scale=getattr(
+                m, "cue_specific_local_joint_correction_residual_scale", 1.0
+            ),
+            cue_specific_local_use_coherence_context=getattr(
+                m, "cue_specific_local_use_coherence_context", True
+            ),
+            cue_specific_local_use_cue_consistency_context=getattr(
+                m, "cue_specific_local_use_cue_consistency_context", False
+            ),
+            cue_specific_local_use_standalone_coherence=getattr(
+                m, "cue_specific_local_use_standalone_coherence", True
+            ),
+            cue_specific_local_use_fine_to_coarse_refinement=getattr(
+                m, "cue_specific_local_use_fine_to_coarse_refinement", False
+            ),
+            cue_specific_local_fine_to_coarse_residual_scale=getattr(
+                m, "cue_specific_local_fine_to_coarse_residual_scale", 1.0
+            ),
+            cue_specific_local_block_type=getattr(
+                m, "cue_specific_local_block_type", "standard"
+            ),
+            cue_specific_local_ild_spectral_kernel_size=getattr(
+                m, "cue_specific_local_ild_spectral_kernel_size", 7
+            ),
+            cue_specific_local_ipd_spectral_kernel_size=getattr(
+                m, "cue_specific_local_ipd_spectral_kernel_size", 3
+            ),
+            cue_specific_local_temporal_stabilizer_type=getattr(
+                m, "cue_specific_local_temporal_stabilizer_type", "none"
+            ),
+            cue_specific_local_temporal_stabilizer_hidden_channels=getattr(
+                m, "cue_specific_local_temporal_stabilizer_hidden_channels", 8
+            ),
+            cue_specific_local_temporal_stabilizer_kernel_size=getattr(
+                m, "cue_specific_local_temporal_stabilizer_kernel_size", 5
+            ),
+            cue_progressive_aggregation=getattr(
+                m, "cue_progressive_aggregation", "mean"
+            ),
+            cue_progressive_channels=getattr(
+                m, "cue_progressive_channels", [8, 12, 16]
+            ),
+            cue_progressive_temporal_dilations=getattr(
+                m, "cue_progressive_temporal_dilations", [1, 2, 4]
+            ),
+            cue_progressive_ild_kernel_size=getattr(
+                m, "cue_progressive_ild_kernel_size", 7
+            ),
+            cue_progressive_ipd_kernel_size=getattr(
+                m, "cue_progressive_ipd_kernel_size", 3
+            ),
+            cue_progressive_out_dim=getattr(m, "cue_progressive_out_dim", 32),
+            cue_progressive_coherence_beta_init=getattr(
+                m, "cue_progressive_coherence_beta_init", 0.5
+            ),
+            cue_stat_mode=getattr(m, "cue_stat_mode", "postcue_uniform"),
+            cue_rw_cpsd_time_frames=getattr(m, "cue_rw_cpsd_time_frames", 5),
+            cue_rw_cpsd_logit_clip=getattr(m, "cue_rw_cpsd_logit_clip", 6.0),
+            cue_rw_cpsd_coefficient_mode=getattr(
+                m, "cue_rw_cpsd_coefficient_mode", "global"
+            ),
+            cue_rw_cpsd_frequency_anchors=getattr(
+                m, "cue_rw_cpsd_frequency_anchors", 8
+            ),
+            cue_target_bias_mode=getattr(m, "cue_target_bias_mode", "shared_unit"),
+            cue_target_bias_max_strength=getattr(
+                m, "cue_target_bias_max_strength", 2.0
+            ),
+            cue_oracle_ild_scale_db=getattr(m, "cue_oracle_ild_scale_db", 6.0),
+            cue_oracle_ipd_scale_deg=getattr(
+                m, "cue_oracle_ipd_scale_deg", 45.0
+            ),
+            cue_delay_max_ms=getattr(m, "cue_delay_max_ms", 1.0),
+            cue_delay_bins=getattr(m, "cue_delay_bins", 33),
+            cue_delay_temperature=getattr(m, "cue_delay_temperature", 20.0),
+            cue_input_mode=getattr(m, "cue_input_mode", "explicit"),
+            raw_complex_cue_out_dim=getattr(m, "raw_complex_cue_out_dim", 112),
+            raw_complex_channels=getattr(m, "raw_complex_channels", [8, 12, 16]),
+            raw_complex_pooled_bins=getattr(m, "raw_complex_pooled_bins", 4),
             disable_content_stream=getattr(m, "disable_content_stream", False),
+            use_branchwise_fusion_norm=getattr(
+                m, "use_branchwise_fusion_norm", False
+            ),
             use_cross_ear_interaction=getattr(m, "use_cross_ear_interaction", False),
             gru_hidden_size=m.gru_hidden_size,
             gru_num_layers=m.gru_num_layers,
             temporal_encoder_type=getattr(m, "temporal_encoder_type", "gru"),
+            temporal_aggregation_type=getattr(m, "temporal_aggregation_type", "attention"),
             mamba_num_layers=getattr(m, "mamba_num_layers", 2),
             mamba_state_dim=getattr(m, "mamba_state_dim", 16),
             mamba_expand_factor=getattr(m, "mamba_expand_factor", 2),
@@ -673,15 +784,44 @@ def build_model(cfg):
             gru_dropout=m.gru_dropout,
             num_classes=m.num_classes,
             azimuth_range=tuple(m.azimuth_range),
+            class_angles_deg=getattr(m, "class_angles_deg", None),
             dropout=m.dropout,
             use_attention_pooling=getattr(m, "use_attention_pooling", True),
             attention_pooling_variant=getattr(m, "attention_pooling_variant", "default"),
             use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", True),
+            front_back_head_mode=getattr(m, "front_back_head_mode", "temporal"),
+            spectral_fb_start_ratio=getattr(m, "spectral_fb_start_ratio", 0.5),
+            spectral_fb_pooled_bins=getattr(m, "spectral_fb_pooled_bins", 16),
+            spectral_fb_hidden_channels=getattr(m, "spectral_fb_hidden_channels", 16),
             use_regression=getattr(m, "use_regression", False),
             use_pure_regression=getattr(m, "use_pure_regression", False),
             temporal_head_type=getattr(m, "temporal_head_type", "default"),
             temporal_mlp_hidden_dim=getattr(m, "temporal_mlp_hidden_dim", 128),
             temporal_mlp_num_layers=getattr(m, "temporal_mlp_num_layers", 2),
+        )
+
+    if model_type == "native_lite_v7_latent_cross_spectrum":
+        return NativeLiteLatentCrossSpectrumDOANet(
+            complex_channels=getattr(m, "latent_complex_channels", [8, 12, 16]),
+            content_out_dim=getattr(m, "latent_content_out_dim", 24),
+            spatial_out_dim=getattr(m, "latent_spatial_out_dim", 24),
+            content_hidden_channels=getattr(m, "latent_content_hidden_channels", 8),
+            content_pooled_freq_bins=getattr(m, "latent_content_pooled_bins", 8),
+            spatial_hidden_channels=getattr(m, "latent_spatial_hidden_channels", 16),
+            spatial_output_channels=getattr(m, "latent_spatial_output_channels", 8),
+            spatial_pooled_freq_bins=getattr(m, "latent_spatial_pooled_bins", 32),
+            gru_hidden_size=m.gru_hidden_size,
+            gru_num_layers=m.gru_num_layers,
+            gru_dropout=m.gru_dropout,
+            num_classes=m.num_classes,
+            azimuth_range=tuple(m.azimuth_range),
+            class_angles_deg=getattr(m, "class_angles_deg", None),
+            dropout=m.dropout,
+            use_attention_pooling=getattr(m, "use_attention_pooling", True),
+            attention_pooling_variant=getattr(m, "attention_pooling_variant", "default"),
+            use_front_back_auxiliary=getattr(m, "use_front_back_auxiliary", False),
+            use_regression=getattr(m, "use_regression", False),
+            use_pure_regression=getattr(m, "use_pure_regression", False),
         )
 
     if model_type == "moving_v7_dual_cue_sequence":

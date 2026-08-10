@@ -110,7 +110,9 @@ class DPRTFRTFLearn(nn.Module):
             num_layers=1,
             batch_first=True,
             bias=True,
-            dropout=dropout,
+            # PyTorch only applies GRU dropout between recurrent layers.
+            # This port has one layer, so make the effective behavior explicit.
+            dropout=0.0,
             bidirectional=False,
         )
         self.rnn_fc = nn.Sequential(

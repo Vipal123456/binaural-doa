@@ -47,11 +47,34 @@ class FeatureExtractor:
                  n_fft: int = 512,
                  hop_length: int = 160,
                  win_length: int = 400,
-                 window: str = "hann"):
+                 window: str = "hann",
+                 spatial_statistics_mode: str = "legacy",
+                 spatial_statistics_time_frames: int = 1):
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.win_length = win_length
         self.coherence_kernel = (5, 3)  # (freq, time) local smoothing window
+        self.spatial_statistics_mode = str(spatial_statistics_mode).lower()
+        self.spatial_statistics_time_frames = int(spatial_statistics_time_frames)
+        valid_statistics_modes = {"legacy", "cpsd_cue", "cpsd_all"}
+        if self.spatial_statistics_mode not in valid_statistics_modes:
+            raise ValueError(
+                "spatial_statistics_mode must be one of "
+                f"{sorted(valid_statistics_modes)}, got {spatial_statistics_mode!r}"
+            )
+        if (
+            self.spatial_statistics_time_frames < 1
+            or self.spatial_statistics_time_frames % 2 == 0
+        ):
+            raise ValueError("spatial_statistics_time_frames must be a positive odd integer")
+        if self.spatial_statistics_mode == "legacy" and self.spatial_statistics_time_frames != 1:
+            raise ValueError(
+                "legacy spatial statistics require spatial_statistics_time_frames=1"
+            )
+        if self.spatial_statistics_mode == "cpsd_all" and self.spatial_statistics_time_frames < 3:
+            raise ValueError(
+                "cpsd_all requires at least 3 frames because single-frame coherence is degenerate"
+            )
 
         if window == "hann":
             self.window = torch.hann_window(win_length)
@@ -108,19 +131,43 @@ class FeatureExtractor:
 
         # IPD = angle(spec_L * conj(spec_R))
         cross = spec_L * spec_R.conj()  # [F, T]
-        ipd = torch.angle(cross).transpose(0, 1)  # [T, F]，弧度制 [-pi, pi]
+        statistics = None
+        if self.spatial_statistics_mode != "legacy":
+            statistics = self._compute_temporal_spatial_statistics(
+                cross,
+                mag_L,
+                mag_R,
+                self.spatial_statistics_time_frames,
+            )
+            ipd_source = statistics["cross"]
+        else:
+            ipd_source = cross
+        ipd = torch.angle(ipd_source).transpose(0, 1)  # [T, F]，弧度制 [-pi, pi]
 
         # 使用 sin/cos 形式缓解相位在 ±pi 处的不连续
         ipd_sin = torch.sin(ipd)  # [T, F]
         ipd_cos = torch.cos(ipd)  # [T, F]
 
-        # ILD = 20 * log10(|mag_L| / |mag_R|)
-        ild = 20.0 * torch.log10((mag_L + eps) / (mag_R + eps))  # [F, T]
+        # CPSD 模式先估计局部功率再计算 ILD；legacy 保持逐帧幅度比。
+        if statistics is None:
+            ild = 20.0 * torch.log10((mag_L + eps) / (mag_R + eps))  # [F, T]
+        else:
+            ild = 10.0 * torch.log10(
+                (statistics["pxx"] + eps) / (statistics["pyy"] + eps)
+            )
         ild = ild.transpose(0, 1)  # [T, F]
 
         # 双耳相干性: |E[LR*]| / sqrt(E[|L|^2]E[|R|^2])
         # 对互谱与功率谱做局部时频平滑，否则瞬时形式会退化为近似常数 1。
-        coherence = self._compute_coherence(cross, mag_L, mag_R, eps).transpose(0, 1)  # [T, F]
+        if self.spatial_statistics_mode == "cpsd_all":
+            cross_mag = statistics["cross"].abs()
+            denom = torch.sqrt(statistics["pxx"] * statistics["pyy"] + eps)
+            coherence_ft = cross_mag / (denom + eps)
+        else:
+            # cpsd_cue deliberately retains the legacy coherence estimator so the
+            # experiment isolates the effect of stabilizing ILD/IPD.
+            coherence_ft = self._compute_coherence(cross, mag_L, mag_R, eps)
+        coherence = coherence_ft.transpose(0, 1)  # [T, F]
         coherence = coherence.clamp_(0.0, 1.0)
 
         return {
@@ -204,3 +251,29 @@ class FeatureExtractor:
         pyy = smooth(mag_R.square())
         denom = torch.sqrt(pxx * pyy + eps)
         return cross_mag / (denom + eps)
+
+    @staticmethod
+    def _smooth_time(x: torch.Tensor, time_frames: int) -> torch.Tensor:
+        """Centered moving average over STFT frames for an ``[F, T]`` tensor."""
+        if time_frames == 1:
+            return x
+        pad = time_frames // 2
+        x = x.unsqueeze(0)  # [1, F, T], treating frequency bins as channels
+        x = F.pad(x, (pad, pad), mode="reflect")
+        return F.avg_pool1d(x, kernel_size=time_frames, stride=1).squeeze(0)
+
+    def _compute_temporal_spatial_statistics(
+        self,
+        cross: torch.Tensor,
+        mag_L: torch.Tensor,
+        mag_R: torch.Tensor,
+        time_frames: int,
+    ) -> Dict[str, torch.Tensor]:
+        """Estimate local auto/cross spectra at each frequency bin."""
+        cross_real = self._smooth_time(cross.real, time_frames)
+        cross_imag = self._smooth_time(cross.imag, time_frames)
+        return {
+            "cross": torch.complex(cross_real, cross_imag),
+            "pxx": self._smooth_time(mag_L.square(), time_frames),
+            "pyy": self._smooth_time(mag_R.square(), time_frames),
+        }

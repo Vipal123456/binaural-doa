@@ -56,6 +56,18 @@ class Trainer:
         self.use_pure_regression = getattr(m, 'use_pure_regression', False)
         self.use_vector_regression = self.model_type == "sdel_doa_reg"
         self.use_dprtf_loss = self.model_type == "dprtf_doa_cls"
+        self.target_mask_aux_weight = float(
+            getattr(t, "target_mask_aux_weight", 0.0)
+        )
+        self.target_covariance_aux_weight = float(
+            getattr(t, "target_covariance_aux_weight", 0.0)
+        )
+        self.cue_reliability_aux_weight = float(
+            getattr(t, "cue_reliability_aux_weight", 0.0)
+        )
+        self.cue_uncertainty_aux_weight = float(
+            getattr(t, "cue_uncertainty_aux_weight", 0.0)
+        )
         if self.use_dprtf_loss:
             self.criterion = DPRTFMSELoss()
             self.logger.info("使用 DP-RTF template MSE loss")
@@ -68,6 +80,7 @@ class Trainer:
             if front_back_aux_weight > 0:
                 msg += f" + front/back辅助头(weight={front_back_aux_weight})"
             self.logger.info(msg)
+
         elif self.use_vector_regression:
             front_back_aux_weight = getattr(t, 'front_back_aux_weight', 0.0)
             self.criterion = DOAVectorRegressionLoss(
@@ -103,6 +116,9 @@ class Trainer:
             front_back_aux_weight = getattr(t, 'front_back_aux_weight', 0.0)
             front_back_focus_weight = getattr(t, 'front_back_focus_weight', 0.0)
             front_back_focus_window_deg = getattr(t, 'front_back_focus_window_deg', 20.0)
+            expected_angle_distance_weight = getattr(t, 'expected_angle_distance_weight', 0.0)
+            angular_distance_normalizer_deg = getattr(t, 'angular_distance_normalizer_deg', 180.0)
+            frame_aux_weight = getattr(t, 'frame_aux_weight', 0.0)
             self.criterion = DOALoss(
                 num_classes=m.num_classes,
                 label_smoothing=t.label_smoothing,
@@ -112,6 +128,10 @@ class Trainer:
                 front_back_aux_weight=front_back_aux_weight,
                 front_back_focus_weight=front_back_focus_weight,
                 front_back_focus_window_deg=front_back_focus_window_deg,
+                class_angles_deg=m.get("class_angles_deg", None),
+                expected_angle_distance_weight=expected_angle_distance_weight,
+                angular_distance_normalizer_deg=angular_distance_normalizer_deg,
+                frame_aux_weight=frame_aux_weight,
             )
             msg = "使用分类loss"
             if anti_confusion_weight > 0:
@@ -128,7 +148,28 @@ class Trainer:
                     f" + 前后轴样本加权(weight={front_back_focus_weight},"
                     f" window={front_back_focus_window_deg}deg)"
                 )
+            if expected_angle_distance_weight > 0:
+                msg += (
+                    f" + expected_angle_distance(weight={expected_angle_distance_weight}, "
+                    f"normalizer={angular_distance_normalizer_deg}deg)"
+                )
+            if frame_aux_weight > 0:
+                msg += f" + frame_aux(weight={frame_aux_weight})"
             self.logger.info(msg)
+
+        if (
+            self.target_mask_aux_weight > 0
+            or self.target_covariance_aux_weight > 0
+            or self.cue_reliability_aux_weight > 0
+            or self.cue_uncertainty_aux_weight > 0
+        ):
+            self.logger.info(
+                "Target-CPSD auxiliary losses: "
+                f"mask={self.target_mask_aux_weight}, "
+                f"covariance={self.target_covariance_aux_weight}, "
+                f"cue_reliability={self.cue_reliability_aux_weight}, "
+                f"cue_uncertainty={self.cue_uncertainty_aux_weight}"
+            )
 
         # 优化器
         self.optimizer = torch.optim.AdamW(
@@ -161,6 +202,7 @@ class Trainer:
         self.metrics = DOAMetrics(
             num_classes=m.num_classes,
             azimuth_range=tuple(m.azimuth_range),
+            class_angles_deg=m.get("class_angles_deg", None),
         )
 
         # TensorBoard 日志
@@ -175,15 +217,34 @@ class Trainer:
 
         # 早停机制（如果配置中启用）
         self.early_stopping = None
+        self.early_stopping_metric = str(
+            getattr(t, "early_stopping_metric", "mae") or "mae"
+        ).lower()
+        if self.early_stopping_metric not in {"mae", "accuracy"}:
+            raise ValueError(
+                "train.early_stopping_metric must be 'mae' or 'accuracy', "
+                f"got {self.early_stopping_metric!r}"
+            )
         patience = int(getattr(t, 'early_stopping_patience', 0) or 0)
         if patience > 0:
+            early_stopping_mode = (
+                "max" if self.early_stopping_metric == "accuracy" else "min"
+            )
+            default_delta = 1.0e-4 if early_stopping_mode == "max" else 0.01
+            early_stopping_delta = float(
+                getattr(t, "early_stopping_min_delta", default_delta)
+            )
             self.early_stopping = EarlyStopping(
                 patience=patience,
-                delta=0.01,  # 改善至少0.01度才算有效
-                mode='min',  # MAE越小越好
+                delta=early_stopping_delta,
+                mode=early_stopping_mode,
                 verbose=False  # 通过logger打印，不使用内置print
             )
-            self.logger.info(f"早停机制已启用 (patience={patience})")
+            self.logger.info(
+                "早停机制已启用 "
+                f"(metric={self.early_stopping_metric}, mode={early_stopping_mode}, "
+                f"patience={patience}, min_delta={early_stopping_delta:g})"
+            )
 
         # 数据增强（如果配置中启用）
         self.augmentation = None
@@ -276,10 +337,23 @@ class Trainer:
 
                 # 检查早停
                 if self.early_stopping is not None:
-                    should_stop = self.early_stopping(mae, epoch)
+                    early_stopping_value = (
+                        accuracy
+                        if self.early_stopping_metric == "accuracy"
+                        else mae
+                    )
+                    should_stop = self.early_stopping(early_stopping_value, epoch)
                     if should_stop:
+                        metric_label = (
+                            "Accuracy"
+                            if self.early_stopping_metric == "accuracy"
+                            else "MAE"
+                        )
+                        metric_value = self.early_stopping.best_value
+                        metric_suffix = "" if metric_label == "Accuracy" else "°"
                         self.logger.info(
-                            f"\n早停触发！最佳 MAE={self.early_stopping.best_value:.2f}° "
+                            f"\n早停触发！最佳 {metric_label}={metric_value:.4f}"
+                            f"{metric_suffix} "
                             f"已连续 {self.early_stopping.patience} 轮无改善。"
                         )
                         self._save(epoch, is_best_mae, is_best_acc)
@@ -378,8 +452,55 @@ class Trainer:
                         front_back_logits=out.get("front_back_logits"),
                         front_back_targets=batch.get("front_back_label"),
                         front_back_focus_distance_deg=batch.get("front_back_focus_distance_deg"),
+                        frame_logits=out.get("frame_logits"),
+                        frame_weights=out.get("attn_weights"),
                     )
                     loss = loss_dict["total"]
+
+                if self.target_mask_aux_weight > 0:
+                    target_mask_loss = out.get("target_mask_loss")
+                    if target_mask_loss is None:
+                        raise RuntimeError(
+                            "target_mask_aux_weight is enabled but the model/dataset "
+                            "did not provide target_mask_loss"
+                        )
+                    loss = loss + self.target_mask_aux_weight * target_mask_loss
+                if self.target_covariance_aux_weight > 0:
+                    target_covariance_loss = out.get("target_covariance_loss")
+                    if target_covariance_loss is None:
+                        raise RuntimeError(
+                            "target_covariance_aux_weight is enabled but the model/dataset "
+                            "did not provide target_covariance_loss"
+                        )
+                    loss = (
+                        loss
+                        + self.target_covariance_aux_weight
+                        * target_covariance_loss
+                    )
+                if self.cue_reliability_aux_weight > 0:
+                    cue_reliability_loss = out.get("cue_reliability_loss")
+                    if cue_reliability_loss is None:
+                        raise RuntimeError(
+                            "cue_reliability_aux_weight is enabled but the model/dataset "
+                            "did not provide cue_reliability_loss"
+                        )
+                    loss = (
+                        loss
+                        + self.cue_reliability_aux_weight
+                        * cue_reliability_loss
+                    )
+                if self.cue_uncertainty_aux_weight > 0:
+                    cue_uncertainty_loss = out.get("cue_uncertainty_loss")
+                    if cue_uncertainty_loss is None:
+                        raise RuntimeError(
+                            "cue_uncertainty_aux_weight is enabled but the "
+                            "model/dataset did not provide cue_uncertainty_loss"
+                        )
+                    loss = (
+                        loss
+                        + self.cue_uncertainty_aux_weight
+                        * cue_uncertainty_loss
+                    )
 
             # 防止数值发散传播到参数：非有限loss直接跳过该batch
             if not torch.isfinite(loss):

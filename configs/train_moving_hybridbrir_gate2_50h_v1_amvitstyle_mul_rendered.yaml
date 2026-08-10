@@ -1,0 +1,55 @@
+dataset:
+  dataset_type: "moving"
+  sample_rate: 16000
+  segment_seconds: 4.0
+  label_steps: 40
+  label_source: "rendered"
+  train_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_moving_hybridbrir_gate2_50h_v1/train_subjects"
+  val_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_moving_hybridbrir_gate2_50h_v1/val_subjects"
+  test_root: "/disk2/bywang/DOA-net/data/librispeech_cipic_moving_hybridbrir_gate2_50h_v1/test_subjects_unseen"
+  split_seed: 42
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: "hann"
+
+model:
+  type: "amvit_style_sequence_baseline"
+  favit_time_bins: 8
+  favit_num_patches: 16
+  favit_embed_dim: 64
+  favit_depth: 4
+  favit_num_heads: 4
+  favit_mlp_ratio: 4.0
+  amvit_modulation_type: "mul"
+  amvit_modulation_hidden_dim: 128
+  amvit_classifier_hidden_dims: [512, 256, 100]
+  label_steps: 40
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.1
+  use_front_back_auxiliary: false
+
+train:
+  batch_size: 16
+  num_workers: 8
+  epochs: 100
+  lr: 0.0005
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+  scheduler: "cosine"
+  cosine_T_max: 100
+  cosine_eta_min: 0.00001
+  amp: false
+  device: "cuda"
+  grad_clip: 1.0
+  front_back_aux_weight: 0.0
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+
+output:
+  save_dir: "outputs/checkpoints_moving_hybridbrir_gate2_50h_v1_amvitstyle_mul_rendered"
+  log_dir: "outputs/logs_moving_hybridbrir_gate2_50h_v1_amvitstyle_mul_rendered"

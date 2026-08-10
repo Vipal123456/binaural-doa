@@ -1,0 +1,74 @@
+# BiEAR-inspired adaptive binaural front-end + 72-class DOA classifier
+# Static hybridbrir gate2 50h v1, comparable with SDEL/v7 static baselines.
+dataset:
+  root_dir: /disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_static_hybridbrir_gate2_50h_v1/train_subjects
+  dataset_type: static
+  sample_rate: 16000
+  segment_seconds: 2.0
+  include_waveform: true
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  split_seed: 42
+  train_root: /disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_static_hybridbrir_gate2_50h_v1/train_subjects
+  val_root: /disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_static_hybridbrir_gate2_50h_v1/val_subjects
+  test_root: /disk2/bywang/DOA-net/data/librispeech_cipic_multisubject_static_hybridbrir_gate2_50h_v1/test_subjects_unseen
+
+feature:
+  n_fft: 512
+  hop_length: 160
+  win_length: 400
+  window: hann
+
+model:
+  type: biear_doa_cls
+  num_classes: 72
+  azimuth_range: [-180, 180]
+  dropout: 0.2
+  use_regression: false
+  use_front_back_auxiliary: true
+
+  # BiEAR-inspired active waveform front-end.
+  biear_n_bands: 64
+  biear_timesteps: 40
+  biear_n_fft: 1024
+  biear_latent_dim: 100
+  biear_encoder_hidden_dim: 200
+  biear_fixed_frontend_q: false
+  biear_controller_mode: independent
+  biear_use_cc: false
+  biear_delta_q_base: 0.5
+  biear_delta_q_low_factor: 0.5
+  biear_delta_q_high_factor: 1.0
+  biear_delta_q_mode: absolute
+
+train:
+  batch_size: 16
+  num_workers: 8
+  epochs: 100
+  lr: 0.0001
+  weight_decay: 0.0001
+  label_smoothing: 0.1
+
+  scheduler: cosine
+  cosine_T_max: 100
+  cosine_eta_min: 0.000005
+
+  amp: false
+  device: cuda
+  grad_clip: 1.0
+
+  anti_confusion_weight: 0.0
+  circular_soft_label_weight: 0.0
+  circular_kappa: 4.0
+  front_back_aux_weight: 0.3
+  front_back_focus_weight: 0.0
+  front_back_focus_window_deg: 20.0
+
+  log_interval: 50
+  val_interval: 1
+  early_stopping_patience: 15
+
+output:
+  save_dir: outputs/checkpoints_static_hybridbrir_gate2_50h_v1_biear_doa_cls_stable
+  log_dir: outputs/logs_static_hybridbrir_gate2_50h_v1_biear_doa_cls_stable

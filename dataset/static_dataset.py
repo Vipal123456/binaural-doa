@@ -14,7 +14,7 @@ import csv
 import hashlib
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Sequence, Tuple, Dict, Any
 
 import numpy as np
 import torch
@@ -74,6 +74,7 @@ class StaticDOADataset(Dataset):
         segment_seconds: float = 2.0,
         num_classes: int = 72,
         azimuth_range: Tuple[int, int] = (-180, 180),
+        class_angles_deg: Optional[Sequence[float]] = None,
         split: str = "train",
         train_ratio: float = 0.7,
         val_ratio: float = 0.15,
@@ -82,6 +83,8 @@ class StaticDOADataset(Dataset):
         hop_length: int = 160,
         win_length: int = 400,
         window: str = "hann",
+        spatial_statistics_mode: str = "legacy",
+        spatial_statistics_time_frames: int = 1,
         add_white_noise: bool = False,
         white_noise_snr_db: float = 10.0,
         white_noise_prob: float = 1.0,
@@ -95,6 +98,9 @@ class StaticDOADataset(Dataset):
         segment_hop_seconds: Optional[float] = None,
         max_segments_per_recording: Optional[int] = None,
         include_waveform: bool = False,
+        component_supervision_enabled: bool = False,
+        component_target_subdir: str = "components/target",
+        component_interferer_subdir: str = "components/interferer",
         feature_cache_enabled: bool = False,
         feature_cache_dir: Optional[str] = None,
         logger: Optional[Any] = None,
@@ -104,6 +110,18 @@ class StaticDOADataset(Dataset):
         self.segment_seconds = segment_seconds
         self.num_classes = num_classes
         self.azimuth_range = azimuth_range
+        self.class_angles_deg = (
+            None
+            if class_angles_deg is None
+            else np.asarray(class_angles_deg, dtype=np.float64)
+        )
+        if self.class_angles_deg is not None:
+            if self.class_angles_deg.ndim != 1 or len(self.class_angles_deg) != num_classes:
+                raise ValueError(
+                    "class_angles_deg must contain exactly num_classes values"
+                )
+            if len(np.unique(self.class_angles_deg)) != num_classes:
+                raise ValueError("class_angles_deg values must be unique")
         self.split = split
         self.train_ratio = train_ratio
         self.val_ratio = val_ratio
@@ -123,6 +141,16 @@ class StaticDOADataset(Dataset):
             int(max_segments_per_recording) if max_segments_per_recording is not None else None
         )
         self.include_waveform = bool(include_waveform)
+        self.component_supervision_enabled = bool(component_supervision_enabled)
+        self.component_target_root = os.path.join(root_dir, component_target_subdir)
+        self.component_interferer_root = os.path.join(
+            root_dir, component_interferer_subdir
+        )
+        self.component_supervision_available = (
+            self.component_supervision_enabled
+            and os.path.isdir(self.component_target_root)
+            and os.path.isdir(self.component_interferer_root)
+        )
         self.feature_cache_enabled = bool(feature_cache_enabled)
         self.feature_cache_dir = feature_cache_dir
         self.logger = logger
@@ -137,6 +165,8 @@ class StaticDOADataset(Dataset):
             hop_length=hop_length,
             win_length=win_length,
             window=window,
+            spatial_statistics_mode=spatial_statistics_mode,
+            spatial_statistics_time_frames=spatial_statistics_time_frames,
         )
         self._cache_warning_emitted = False
         self._feature_cache_root = self._init_feature_cache_root()
@@ -168,6 +198,9 @@ class StaticDOADataset(Dataset):
             f"{self.split}_sr{self.target_sr}_seg{seg_ms}ms_"
             f"cls{self.num_classes}_az{az_min}_{az_max}_seed{self.split_seed}.pkl"
         )
+        if self.class_angles_deg is not None:
+            angle_digest = hashlib.md5(self.class_angles_deg.tobytes()).hexdigest()[:10]
+            filename = filename.replace(".pkl", f"_angles{angle_digest}.pkl")
         hop_ms = int(round(self.segment_hop_seconds * 1000.0))
         maxseg_tag = (
             f"maxseg{self.max_segments_per_recording}"
@@ -205,7 +238,9 @@ class StaticDOADataset(Dataset):
         feature_tag = (
             f"sr{self.target_sr}_seg{int(round(self.segment_seconds * 1000.0))}ms_"
             f"fft{self.feature_extractor.n_fft}_hop{self.feature_extractor.hop_length}_"
-            f"win{self.feature_extractor.win_length}"
+            f"win{self.feature_extractor.win_length}_"
+            f"stats{self.feature_extractor.spatial_statistics_mode}_"
+            f"st{self.feature_extractor.spatial_statistics_time_frames}"
         )
         cache_root = os.path.join(cache_root, feature_tag)
         os.makedirs(cache_root, exist_ok=True)
@@ -218,7 +253,10 @@ class StaticDOADataset(Dataset):
         cache_key = (
             f"{seg['audio_path']}|{seg['start_sec']:.6f}|{seg['duration_sec']:.6f}|"
             f"{self.target_sr}|{self.feature_extractor.n_fft}|{self.feature_extractor.hop_length}|"
-            f"{self.feature_extractor.win_length}|{self.audio_subdir}|{self.metadata_subdir}"
+            f"{self.feature_extractor.win_length}|"
+            f"{self.feature_extractor.spatial_statistics_mode}|"
+            f"{self.feature_extractor.spatial_statistics_time_frames}|"
+            f"{self.audio_subdir}|{self.metadata_subdir}"
         )
         digest = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
         prefix = str(seg.get("file_id", "unknown"))
@@ -498,6 +536,12 @@ class StaticDOADataset(Dataset):
 
     def _azimuth_to_label(self, azimuth_deg: float) -> int:
         """将方位角 (度) 转换为离散类别标签。"""
+        if self.class_angles_deg is not None:
+            diffs = np.abs(
+                (self.class_angles_deg - float(azimuth_deg) + 180.0) % 360.0 - 180.0
+            )
+            return int(np.argmin(diffs))
+
         # 归一化到 [az_min, az_max) 范围
         az = azimuth_deg
         while az < self.az_min:
@@ -587,6 +631,33 @@ class StaticDOADataset(Dataset):
         if self.include_waveform:
             audio_tensor = torch.from_numpy(audio).float()
             sample["waveform"] = audio_tensor  # [2, samples]
+        if self.component_supervision_available:
+            target_path = os.path.join(self.component_target_root, f"{file_id}.wav")
+            interferer_path = os.path.join(
+                self.component_interferer_root, f"{file_id}.wav"
+            )
+            if not os.path.isfile(target_path) or not os.path.isfile(interferer_path):
+                raise FileNotFoundError(
+                    f"Missing component supervision for {file_id}: "
+                    f"{target_path}, {interferer_path}"
+                )
+            target_audio = self._load_audio_segment(
+                target_path, seg["start_sec"], seg["duration_sec"]
+            )
+            interferer_audio = self._load_audio_segment(
+                interferer_path, seg["start_sec"], seg["duration_sec"]
+            )
+            target_feats = self.feature_extractor.extract(
+                torch.from_numpy(target_audio).float()
+            )
+            interferer_feats = self.feature_extractor.extract(
+                torch.from_numpy(interferer_audio).float()
+            )
+            for side in ("L", "R"):
+                for part in ("real", "imag"):
+                    key = f"spec_{part}_{side}"
+                    sample[f"target_{key}"] = target_feats[key].contiguous()
+                    sample[f"interferer_{key}"] = interferer_feats[key].contiguous()
         return sample
 
     @staticmethod
@@ -680,6 +751,7 @@ def build_static_datasets(cfg, logger=None) -> Tuple[Dataset, Dataset, Dataset]:
         segment_seconds=ds_cfg.segment_seconds,
         num_classes=model_cfg.num_classes,
         azimuth_range=tuple(model_cfg.azimuth_range),
+        class_angles_deg=model_cfg.get("class_angles_deg", None),
         train_ratio=ds_cfg.get("train_ratio", 0.7),
         val_ratio=ds_cfg.get("val_ratio", 0.15),
         split_seed=ds_cfg.get("split_seed", 42),
@@ -687,6 +759,8 @@ def build_static_datasets(cfg, logger=None) -> Tuple[Dataset, Dataset, Dataset]:
         hop_length=feat_cfg.hop_length,
         win_length=feat_cfg.win_length,
         window=feat_cfg.window,
+        spatial_statistics_mode=feat_cfg.get("spatial_statistics_mode", "legacy"),
+        spatial_statistics_time_frames=feat_cfg.get("spatial_statistics_time_frames", 1),
         add_white_noise=ds_cfg.get("add_white_noise", False),
         white_noise_snr_db=ds_cfg.get("white_noise_snr_db", 10.0),
         white_noise_prob=ds_cfg.get("white_noise_prob", 1.0),
@@ -699,6 +773,15 @@ def build_static_datasets(cfg, logger=None) -> Tuple[Dataset, Dataset, Dataset]:
         segment_hop_seconds=ds_cfg.get("segment_hop_seconds", None),
         max_segments_per_recording=ds_cfg.get("max_segments_per_recording", None),
         include_waveform=ds_cfg.get("include_waveform", False),
+        component_supervision_enabled=ds_cfg.get(
+            "component_supervision_enabled", False
+        ),
+        component_target_subdir=ds_cfg.get(
+            "component_target_subdir", "components/target"
+        ),
+        component_interferer_subdir=ds_cfg.get(
+            "component_interferer_subdir", "components/interferer"
+        ),
         feature_cache_enabled=ds_cfg.get("feature_cache_enabled", False),
         feature_cache_dir=ds_cfg.get("feature_cache_dir", None),
         logger=logger,
