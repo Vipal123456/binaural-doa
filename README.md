@@ -51,7 +51,7 @@ CF-NCBNet 围绕三个问题组织：
 左右耳波形首先变换为
 
 $$
-X_e(t,f)=\operatorname{STFT}(x_e),\qquad e\in\{L,R\}.
+X_e(t,f)=\mathrm{STFT}(x_e),\qquad e\in\{L,R\}.
 $$
 
 当前配置使用 16 kHz 采样率、512 点 DFT、400 点 Hann 窗和 160 点帧移，保留 $F=257$ 个非负频点。10 ms 帧移下，五个连续帧的中心跨度约为 40 ms。
@@ -67,7 +67,7 @@ $$
 均匀平均 $\bar P_L,\bar P_R,\bar C$ 只用作局部 pilot。每个候选帧构造相对能量、ILD 一致性和相位一致性：
 
 $$
-r_E^k= \frac{\ell^k-\operatorname{mean}_j\ell^j} {\max(\operatorname{std}_j\ell^j,0.1)}, \qquad \ell^k=\log(P_L^k+P_R^k+\epsilon),
+r_E^k= \frac{\ell^k-\mathrm{mean}_j\ell^j} {\max(\mathrm{std}_j\ell^j,0.1)}, \qquad \ell^k=\log(P_L^k+P_R^k+\epsilon),
 $$
 
 $$
@@ -81,7 +81,7 @@ $$
 ILD 与 IPD 使用两组独立可学习权重：
 
 $$
-w_I^k=\operatorname{softmax}_k \left(a_E^I r_E^k+a_I r_I^k\right), \qquad w_P^k=\operatorname{softmax}_k \left(a_E^P r_E^k+a_P r_P^k\right).
+w_I^k=\mathrm{softmax}_k \left(a_E^I r_E^k+a_I r_I^k\right), \qquad w_P^k=\mathrm{softmax}_k \left(a_E^P r_E^k+a_P r_P^k\right).
 $$
 
 softmax 前的分数裁剪至 $[-6,6]$。四个系数从零初始化，因此训练起点满足 $w_I^k=w_P^k=1/K$，即严格退化为均匀 CPSD。
@@ -147,7 +147,7 @@ $$
 $$
 
 $$
-\mathbf m_t=\operatorname{MLP} ([\mathbf f_{M,t};\mathbf f_{D,t};|\mathbf f_{D,t}|]) \in\mathbb R^{80}.
+\mathbf m_t=\mathrm{MLP} ([\mathbf f_{M,t};\mathbf f_{D,t};|\mathbf f_{D,t}|]) \in\mathbb R^{80}.
 $$
 
 编码器末端左右耳特征图同时汇聚为 32 带，并以相同关系构造
@@ -169,7 +169,7 @@ $$
 第一步在不混合频带的情况下处理每个频带的完整时间轨迹：
 
 $$
-\mathbf Z_{:,b}=\operatorname{BiGRU}_{\phi} (\mathbf H^0_{:,b}),\qquad b=1,\ldots,32.
+\mathbf Z_{:,b}=\mathrm{BiGRU}_{\phi} (\mathbf H^0_{:,b}),\qquad b=1,\ldots,32.
 $$
 
 32 个频带共享参数 $\phi$。每个方向包含 16 个隐藏单元，输出投影回 32 维，并通过残差连接与 LayerNorm 得到 $\mathbf H^{\mathrm{NB}}$。参数共享表达的是“各频带采用相同的时间更新规则”，但各频带在进入该 GRU 前彼此独立。
@@ -177,13 +177,13 @@ $$
 第二步用 depthwise $1\times3$ 卷积和 pointwise $1\times1$ 卷积交换邻频信息：
 
 $$
-\mathbf H^{\mathrm{local}}= \operatorname{LN}\left( \mathbf H^{\mathrm{NB}}+ \mathcal C_{1\times3}(\mathbf H^{\mathrm{NB}}) \right).
+\mathbf H^{\mathrm{local}}= \mathrm{LN}\left( \mathbf H^{\mathrm{NB}}+ \mathcal C_{1\times3}(\mathbf H^{\mathrm{NB}}) \right).
 $$
 
 第三步对每个时间--通道切片执行秩为 8 的全带映射：
 
 $$
-\mathbf H^{\mathrm{FB}}= \operatorname{LN}\left( \mathbf H^{\mathrm{local}}+ W_2\,\sigma(W_1\mathbf H^{\mathrm{local}}) \right),
+\mathbf H^{\mathrm{FB}}= \mathrm{LN}\left( \mathbf H^{\mathrm{local}}+ W_2\,\sigma(W_1\mathbf H^{\mathrm{local}}) \right),
 $$
 
 其中 $W_1\in\mathbb R^{8\times32}$，$W_2\in\mathbb R^{32\times8}$。低秩结构降低了全带交互的参数量，但它只是一种结构约束，不保证自动学得物理一致的方向模式。
@@ -191,7 +191,7 @@ $$
 最后在频带轴执行注意力汇聚：
 
 $$
-\alpha_{t,b}=\operatorname{softmax}_b(a_{t,b}), \qquad \mathbf q_t=\sum_b\alpha_{t,b}\mathbf H^{\mathrm{FB}}_{t,b} \in\mathbb R^{32}.
+\alpha_{t,b}=\mathrm{softmax}_b(a_{t,b}), \qquad \mathbf q_t=\sum_b\alpha_{t,b}\mathbf H^{\mathrm{FB}}_{t,b} \in\mathbb R^{32}.
 $$
 
 ### 3.6 有界残差与片段级聚合
@@ -205,7 +205,7 @@ $$
 输出投影采用零初始化，训练开始时模型等价于不含该残差的融合基线。逐帧表示为
 
 $$
-\widetilde{\mathbf z}_t= \operatorname{Dropout}\left[ \operatorname{LN}\left( [\mathbf m_t;\mathbf c_t]+\mathbf r_t \right)\right] \in\mathbb R^{104}.
+\widetilde{\mathbf z}_t= \mathrm{Dropout}\left[ \mathrm{LN}\left( [\mathbf m_t;\mathbf c_t]+\mathbf r_t \right)\right] \in\mathbb R^{104}.
 $$
 
 系数 0.25 只限制残差各坐标的绝对值，不保证它相对原特征始终很小，也不保证 80 维频谱部分和 24 维空间部分获得相同比例的修正。
@@ -213,11 +213,11 @@ $$
 $\widetilde{\mathbf z}_t$ 输入单层双向 GRU，每个方向隐藏维度为 80，得到 $\mathbf h_t\in\mathbb R^{160}$。时间注意力为
 
 $$
-\beta_t=\operatorname{softmax}_t\left( \mathbf w_2^\top\tanh(W_1\mathbf h_t+\mathbf b_1)+b_2 \right),
+\beta_t=\mathrm{softmax}_t\left( \mathbf w_2^\top\tanh(W_1\mathbf h_t+\mathbf b_1)+b_2 \right),
 $$
 
 $$
-\mathbf h=\sum_t\beta_t\mathbf h_t, \qquad \mathbf p=\operatorname{softmax}(W_c\mathbf h+\mathbf b_c).
+\mathbf h=\sum_t\beta_t\mathbf h_t, \qquad \mathbf p=\mathrm{softmax}(W_c\mathbf h+\mathbf b_c).
 $$
 
 NCBF 中的 BiGRU 处理保留频带轴的逐带序列；末端 BiGRU 处理已经完成频带汇聚的 104 维逐帧序列。两者输入和职责不同，但都跨越完整时间轴，这是当前结构复杂度和潜在冗余的主要限制之一。
