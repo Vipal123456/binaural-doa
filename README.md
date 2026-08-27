@@ -75,7 +75,7 @@ r_I^k=-\frac14\min\left(|\rho^k-\bar\rho|,4\right), \qquad \rho^k=\log\frac{P_L^
 $$
 
 $$
-r_P^k=\Re\left\{ \frac{C^k}{|C^k|+\epsilon} \left(\frac{\bar C}{|\bar C|+\epsilon}\right)^* \right\}.
+r_P^k=\mathrm{Re}\left( \frac{C^k}{|C^k|+\epsilon} \left(\frac{\bar C}{|\bar C|+\epsilon}\right)^* \right).
 $$
 
 ILD 与 IPD 使用两组独立可学习权重：
